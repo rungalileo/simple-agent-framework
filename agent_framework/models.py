@@ -2,37 +2,48 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from enum import Enum
+from dataclasses import dataclass, field
+from .utils.hooks import ToolHooks, ToolSelectionHooks
+from .utils.logging import AgentLogger
 
 class AgentMetadata(BaseModel):
     """Metadata associated with an agent"""
-    name: str
-    description: Optional[str] = None
-    version: str = "1.0.0"
-    capabilities: List[str] = Field(default_factory=list)
-    custom_attributes: Dict[str, Any] = Field(default_factory=dict)
+    name: str = Field(description="Name of the agent")
+    description: Optional[str] = Field(None, description="Description of the agent's purpose and capabilities")
+    version: str = Field("1.0.0", description="Version of the agent")
+    capabilities: List[str] = Field(default_factory=list, description="List of capabilities this agent has")
+    custom_attributes: Dict[str, Any] = Field(default_factory=dict, description="Additional custom metadata for the agent")
 
-class Tool(BaseModel):
-    """Definition of a tool available to agents"""
-    name: str = Field(
-        description="Unique identifier for the tool"
-    )
-    description: str = Field(
-        description="Human-readable description of what the tool does and when to use it"
-    )
-    input_schema: Dict[str, Any] = Field(
-        description="JSON Schema defining the expected input parameters and their types"
-    )
-    output_schema: Dict[str, Any] = Field(
-        description="JSON Schema defining the structure and types of the tool's output"
-    )
-    tags: List[str] = Field(
-        default_factory=list,
-        description="Categories or labels that describe the tool's capabilities and use cases"
-    )
-    constraints: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Optional limitations or requirements for using the tool"
-    )
+class VerbosityLevel(str, Enum):
+    """Controls how much information is displayed to the user"""
+    NONE = "none"   # Only show final results
+    LOW = "low"     # Show major steps and results
+    HIGH = "high"   # Show detailed execution steps, tool selection, and reasoning
+
+@dataclass
+class ToolContext:
+    """Context passed to tool hooks containing execution history and metadata"""
+    task: str = field(metadata={"description": "The current task being executed"})
+    tool_name: str = field(metadata={"description": "Name of the tool being executed"})
+    inputs: Dict[str, Any] = field(metadata={"description": "Input parameters for the tool"})
+    previous_tools: List[str] = field(metadata={"description": "List of tools that were previously executed in this task"})
+    previous_results: List[Dict[str, Any]] = field(metadata={"description": "Results from previous tool executions"})
+    previous_errors: List[str] = field(metadata={"description": "Errors from previous tool executions"})
+    message_history: List[Dict[str, Any]] = field(metadata={"description": "Complete history of messages and tool executions"})
+    agent_id: str = field(metadata={"description": "ID of the agent executing the tool"})
+    task_id: str = field(metadata={"description": "ID of the current task"})
+    start_time: datetime = field(metadata={"description": "When the task started"})
+    metadata: Dict[str, Any] = field(metadata={"description": "Additional metadata from agent configuration"})
+
+@dataclass
+class Tool:
+    """Model representing a tool that can be used by an agent"""
+    name: str = field(metadata={"description": "Unique identifier for the tool"})
+    description: str = field(metadata={"description": "Human-readable description of what the tool does"})
+    tags: List[str] = field(metadata={"description": "Categories or labels for the tool's capabilities"})
+    input_schema: Dict[str, Any] = field(metadata={"description": "JSON Schema defining expected input parameters"})
+    output_schema: Dict[str, Any] = field(metadata={"description": "JSON Schema defining the tool's output structure"})
+    hooks: Optional[ToolHooks] = field(default=None, metadata={"description": "Optional hooks for tool execution lifecycle"})
 
 class ToolSelectionCriteria(BaseModel):
     """Criteria used for selecting a tool"""
@@ -76,20 +87,10 @@ class ToolSelectionReasoning(BaseModel):
         le=1.0
     )
 
-class VerbosityLevel(str, Enum):
-    """Verbosity level for agent logging"""
-    NONE = "none"  # No logging
-    LOW = "low"    # Basic logging
-    HIGH = "high"  # Detailed logging including tool selection and reasoning
-
 class ToolCall(BaseModel):
     """Record of a tool invocation"""
-    tool_name: str = Field(
-        description="Name of the tool that was called"
-    )
-    inputs: Dict[str, Any] = Field(
-        description="Parameters passed to the tool during execution"
-    )
+    tool_name: str = Field(description="Name of the tool that was called")
+    inputs: Dict[str, Any] = Field(description="Parameters passed to the tool during execution")
     outputs: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Results returned by the tool execution"
@@ -190,4 +191,24 @@ class TaskExecution(BaseModel):
     error: Optional[str] = Field(
         default=None,
         description="Error message if the task execution failed"
+    )
+
+@dataclass
+class AgentConfig:
+    """Configuration for an agent"""
+    verbosity: VerbosityLevel = field(
+        default=VerbosityLevel.LOW,
+        metadata={"description": "Level of detail to display to the user"}
+    )
+    logger: Optional[AgentLogger] = field(
+        default=None,
+        metadata={"description": "Optional logger for recording agent activity"}
+    )
+    tool_selection_hooks: Optional[ToolSelectionHooks] = field(
+        default=None,
+        metadata={"description": "Hooks for tool selection lifecycle"}
+    )
+    metadata: Dict[str, Any] = field(
+        default_factory=dict,
+        metadata={"description": "Additional configuration metadata"}
     )

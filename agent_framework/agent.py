@@ -3,11 +3,12 @@ from typing import Any, Dict, List, Optional, Callable, Awaitable
 from uuid import uuid4
 from datetime import datetime
 import json
+from .utils.logging import AgentLogger
 
 from .models import (
     AgentMetadata, TaskExecution, ExecutionStep, ToolCall,
     Tool, ToolSelectionCriteria, ToolSelectionReasoning,
-    VerbosityLevel, TaskAnalysis
+    VerbosityLevel, TaskAnalysis, ToolContext, ToolHooks, ToolSelectionHooks, AgentConfig
 )
 from .llm.base import LLMProvider
 from .llm.models import LLMMessage, LLMConfig, ToolSelectionOutput
@@ -23,25 +24,31 @@ class Agent(ABC):
     
     def __init__(
         self,
-        agent_id: Optional[str] = None,
-        metadata: Optional[AgentMetadata] = None,
-        tool_selection_criteria: Optional[ToolSelectionCriteria] = None,
+        *args,
+        verbosity: VerbosityLevel = VerbosityLevel.LOW,
+        logger: Optional[AgentLogger] = None,
+        tool_selection_hooks: Optional[ToolSelectionHooks] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         llm_provider: Optional[LLMProvider] = None,
-        verbosity: VerbosityLevel = VerbosityLevel.LOW
+        **kwargs
     ):
-        self.agent_id = agent_id or str(uuid4())
-        self.metadata = metadata or AgentMetadata(name=self.__class__.__name__)
-        self.state: Dict[str, Any] = {}
-        self.current_task: Optional[TaskExecution] = None
+        self.agent_id = str(uuid4())
+        self.config = AgentConfig(
+            verbosity=verbosity,
+            logger=logger,
+            tool_selection_hooks=tool_selection_hooks,
+            metadata=metadata or {}
+        )
+        self.llm_provider = llm_provider
         self.tools: Dict[str, Tool] = {}
         self.tool_implementations: Dict[str, Callable[..., Awaitable[Dict[str, Any]]]] = {}
-        self.tool_selection_criteria = tool_selection_criteria or ToolSelectionCriteria()
-        self.llm_provider = llm_provider
-        self.verbosity = verbosity
+        self.current_task: Optional[TaskExecution] = None
+        self.state: Dict[str, Any] = {}
+        self.message_history: List[Dict[str, Any]] = []
 
     def log(self, message: str, level: VerbosityLevel = VerbosityLevel.LOW) -> None:
         """Log a message if verbosity level is sufficient"""
-        if self.verbosity.value >= level.value:
+        if self.config.verbosity.value >= level.value:
             print(message)
 
     def register_tool(
@@ -52,6 +59,77 @@ class Agent(ABC):
         """Register a tool and its implementation"""
         self.tools[tool.name] = tool
         self.tool_implementations[tool.name] = implementation
+
+    def _create_tool_context(self, tool_name: str, inputs: Dict[str, Any]) -> ToolContext:
+        """Create a context object for tool execution"""
+        if not self.current_task:
+            raise ValueError("No active task")
+            
+        return ToolContext(
+            task=self.current_task.input,
+            tool_name=tool_name,
+            inputs=inputs,
+            previous_tools=[step.tool_name for step in self.current_task.steps],
+            previous_results=[step.result for step in self.current_task.steps if step.result],
+            previous_errors=[step.error for step in self.current_task.steps if step.error],
+            message_history=self.message_history.copy(),
+            agent_id=self.agent_id,
+            task_id=self.current_task.task_id,
+            start_time=self.current_task.start_time,
+            metadata=self.config.metadata
+        )
+
+    async def call_tool(
+        self,
+        tool_name: str,
+        inputs: Dict[str, Any],
+        execution_reasoning: str,
+        context: Dict[str, Any],
+        selection_criteria: Optional[ToolSelectionCriteria] = None
+    ) -> Dict[str, Any]:
+        """Execute a tool and log the call with selection reasoning"""
+        if tool_name not in self.tools:
+            raise ValueError(f"Tool {tool_name} not found")
+        
+        tool = self.tools[tool_name]
+        tool_context = self._create_tool_context(tool_name, inputs)
+        
+        try:
+            # Call before_execution hook if available
+            if tool.hooks:
+                await tool.hooks.before_execution(tool_context)
+            
+            # Execute the tool
+            result = await self._execute_tool(tool_name, inputs)
+            
+            # Record the execution
+            self.message_history.append({
+                "role": "tool",
+                "tool_name": tool_name,
+                "inputs": inputs,
+                "result": result,
+                "reasoning": execution_reasoning,
+                "timestamp": datetime.now()
+            })
+            
+            # Call after_execution hook if available
+            if tool.hooks:
+                await tool.hooks.after_execution(tool_context, result)
+            
+            # Display if high verbosity
+            if self.config.verbosity == VerbosityLevel.HIGH:
+                self.log(f"\nExecuting Tool: {tool_name}", VerbosityLevel.HIGH)
+                self.log(f"Execution Reasoning: {execution_reasoning}", VerbosityLevel.HIGH)
+                self.log(f"Inputs: {inputs}", VerbosityLevel.HIGH)
+                self.log(f"Tool Execution Result: {result}", VerbosityLevel.HIGH)
+            
+            return result
+            
+        except Exception as e:
+            # Call after_execution hook with error if available
+            if tool.hooks:
+                await tool.hooks.after_execution(tool_context, None, error=e)
+            raise
 
     def _create_tool_selection_prompt(
         self,
@@ -130,6 +208,16 @@ class Agent(ABC):
             available_tools
         )
         
+        # Log the prompt and context
+        if self.config.logger:
+            self.config.logger.info(
+                "Creating tool selection prompt",
+                prompt_messages=messages,
+                context=context,
+                criteria=criteria.model_dump(),
+                available_tools=[tool.name for tool in available_tools]
+            )
+        
         try:
             # Try using structured output with function calling
             if isinstance(self.llm_provider, OpenAIProvider):
@@ -138,30 +226,28 @@ class Agent(ABC):
                     ToolSelectionOutput,
                     self.llm_provider.config
                 )
+                
+                # Log the LLM response
+                if self.config.logger:
+                    self.config.logger.info(
+                        "Received tool selection response",
+                        selection_output=selection_output.model_dump(),
+                        task_id=self.current_task.task_id if self.current_task else None
+                    )
+                
                 return (
                     selection_output.selected_tools,
                     selection_output.confidence,
                     selection_output.reasoning_steps
                 )
-        except Exception:
-            # Fall back to regular generation if structured output fails
-            pass
-            
-        # Regular generation with JSON parsing
-        response = await self.llm_provider.generate(
-            messages,
-            self.llm_provider.config
-        )
-        
-        selection_output = ToolSelectionOutput.model_validate_json(
-            response.content
-        )
-        
-        return (
-            selection_output.selected_tools,
-            selection_output.confidence,
-            selection_output.reasoning_steps
-        )
+        except Exception as e:
+            if self.config.logger:
+                self.config.logger.error(
+                    "Failed to generate structured tool selection",
+                    error=str(e),
+                    task_id=self.current_task.task_id if self.current_task else None
+                )
+            raise
 
     async def select_tool(
         self,
@@ -186,7 +272,7 @@ class Agent(ABC):
                 list(self.tools.values())
             )
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 self.log("\nTool Selection Process:", VerbosityLevel.HIGH)
                 self.log(f"Context: {context}", VerbosityLevel.HIGH)
                 self.log(f"Available Tools: {list(self.tools.keys())}", VerbosityLevel.HIGH)
@@ -201,13 +287,22 @@ class Agent(ABC):
                 list(self.tools.values())
             )
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 self.log("\nFallback Tool Selection:", VerbosityLevel.HIGH)
                 self.log(f"Selected Tools: {selected_tools} (Confidence: {confidence:.2f})", VerbosityLevel.HIGH)
         
         reasoning.selected_tools = selected_tools
         reasoning.confidence_score = confidence
         reasoning.reasoning_steps = steps
+        
+        # Call after_selection hook if available
+        if self.config.tool_selection_hooks:
+            await self.config.tool_selection_hooks.after_selection(
+                self._create_tool_context("", {}),
+                selected_tools,
+                confidence,
+                steps
+            )
         
         return reasoning
 
@@ -223,30 +318,6 @@ class Agent(ABC):
         Returns: (selected_tool_names, confidence_score, reasoning_steps)
         """
         pass
-
-    async def call_tool(
-        self,
-        tool_name: str,
-        inputs: Dict[str, Any],
-        execution_reasoning: str,
-        context: Optional[Dict[str, Any]] = None,
-        selection_criteria: Optional[ToolSelectionCriteria] = None
-    ) -> Dict[str, Any]:
-        """Execute a tool and log the call with selection reasoning"""
-        if tool_name not in self.tools:
-            raise ValueError(f"Tool {tool_name} not found")
-            
-        if self.verbosity == VerbosityLevel.HIGH:
-            self.log(f"\nExecuting Tool: {tool_name}", VerbosityLevel.HIGH)
-            self.log(f"Execution Reasoning: {execution_reasoning}", VerbosityLevel.HIGH)
-            self.log(f"Inputs: {inputs}", VerbosityLevel.HIGH)
-        
-        result = await self._execute_tool(tool_name, inputs)
-        
-        if self.verbosity == VerbosityLevel.HIGH:
-            self.log(f"Tool Execution Result: {result}", VerbosityLevel.HIGH)
-        
-        return result
 
     async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Implementation of tool execution logic.
@@ -322,7 +393,16 @@ class Agent(ABC):
 
         messages = self._create_planning_prompt(task)
         
-        if self.verbosity == VerbosityLevel.HIGH:
+        # Log the planning prompt
+        if self.config.logger:
+            self.config.logger.info(
+                "Creating task planning prompt",
+                prompt_messages=messages,
+                task=task,
+                task_id=self.current_task.task_id if self.current_task else None
+            )
+        
+        if self.config.verbosity == VerbosityLevel.HIGH:
             display_task_header(task)
 
         try:
@@ -332,14 +412,29 @@ class Agent(ABC):
                 self.llm_provider.config
             )
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            # Log the planning response
+            if self.config.logger:
+                self.config.logger.info(
+                    "Received task planning response",
+                    plan=plan.model_dump(),
+                    task_id=self.current_task.task_id if self.current_task else None
+                )
+            
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 display_analysis(plan.input_analysis)
                 display_chain_of_thought(plan.chain_of_thought)
                 display_execution_plan(plan.execution_plan)
             
             return plan
         except Exception as e:
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.logger:
+                self.config.logger.error(
+                    "Failed to generate task plan",
+                    error=str(e),
+                    task=task,
+                    task_id=self.current_task.task_id if self.current_task else None
+                )
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 display_error(str(e))
             raise
 
@@ -352,6 +447,15 @@ class Agent(ABC):
             start_time=datetime.now(),
             steps=[]
         )
+        
+        # Log task start
+        if self.config.logger:
+            self.config.logger.info(
+                "Starting task execution",
+                task=task,
+                task_id=self.current_task.task_id,
+                agent_id=self.agent_id
+            )
         
         try:
             # First, create a plan using chain of thought reasoning
@@ -385,7 +489,7 @@ class Agent(ABC):
                     context={"task": task, "plan": plan}
                 )
                 
-                if self.verbosity == VerbosityLevel.HIGH:
+                if self.config.verbosity == VerbosityLevel.HIGH:
                     display_tool_result(tool_name, result)
                 
                 results.append((tool_name, result))
@@ -408,8 +512,17 @@ class Agent(ABC):
             combined_result = "\n".join(markdown_output)
             self.current_task.output = combined_result
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 display_final_result(combined_result)
+            
+            # Log task completion
+            if self.config.logger:
+                self.config.logger.info(
+                    "Task execution completed",
+                    task_id=self.current_task.task_id,
+                    result=combined_result,
+                    execution_time=(datetime.now() - self.current_task.start_time).total_seconds()
+                )
             
             return combined_result
                 
@@ -417,7 +530,7 @@ class Agent(ABC):
             self.current_task.error = str(e)
             self.current_task.status = "failed"
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 display_error(str(e))
             
             raise
@@ -435,22 +548,3 @@ class Agent(ABC):
     async def _execute_task(self, task: str) -> str:
         """Implementation of task execution logic"""
         pass
-
-    def log_step(
-        self,
-        step_type: str,
-        description: str,
-        tool_calls: Optional[List[ToolCall]] = None,
-        intermediate_state: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Log an execution step"""
-        if not self.current_task:
-            raise RuntimeError("No active task execution")
-            
-        step = ExecutionStep(
-            step_type=step_type,
-            description=description,
-            tool_calls=tool_calls or [],
-            intermediate_state=intermediate_state
-        )
-        self.current_task.steps.append(step)

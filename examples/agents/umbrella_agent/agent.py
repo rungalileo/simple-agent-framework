@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 from datetime import datetime
 from agent_framework.agent import Agent
@@ -7,8 +7,10 @@ from agent_framework.llm.models import LLMConfig, LLMMessage
 from agent_framework.llm.openai_provider import OpenAIProvider
 from agent_framework.config import load_config
 from agent_framework.utils.formatting import display_tool_result, display_final_result, display_error
-from examples.agents.umbrella_agent.tools.weather_retriever import WeatherRetrieverTool
-from examples.agents.umbrella_agent.tools.umbrella_decider import UmbrellaDeciderTool
+from agent_framework.utils.logging import AgentLogger, LoggingToolHooks, LoggingToolSelectionHooks
+from .tools.weather_retriever import WeatherRetrieverTool
+from .tools.umbrella_decider import UmbrellaDeciderTool
+from agent_framework.models import VerbosityLevel
 
 class UmbrellaAgent(Agent):
     """Agent that determines if you need an umbrella based on weather forecast"""
@@ -16,35 +18,71 @@ class UmbrellaAgent(Agent):
     def __init__(
         self,
         *args,
+        verbosity: VerbosityLevel = VerbosityLevel.LOW,
+        logger: Optional[AgentLogger] = None,
+        tool_selection_hooks: Optional[LoggingToolSelectionHooks] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs
     ):
+        """Initialize the umbrella agent"""
         # Load configuration
         config = load_config()
         
         # Configure LLM provider
         llm_config = LLMConfig(
             model="gpt-4",
-            temperature=0.1  # Lower temperature for more consistent decision making
+            temperature=0.1
         )
         llm_provider = OpenAIProvider(
             config=llm_config,
             api_key=config["openai_api_key"]
         )
         
+        # Create hooks if logger is provided
+        tool_hooks = None
+        selection_hooks = None
+        if logger:
+            tool_hooks = LoggingToolHooks(logger)
+            selection_hooks = LoggingToolSelectionHooks(logger)
+        
+        # Initialize base agent
         super().__init__(
             *args,
+            verbosity=verbosity,
+            logger=logger,
+            tool_selection_hooks=selection_hooks,
+            metadata=metadata,
             llm_provider=llm_provider,
             **kwargs
         )
         
-        # Register available tools
+        # Register tools with hooks if available
         self.register_tool(
-            WeatherRetrieverTool.get_tool_definition(),
+            Tool(
+                name="weather_retriever",
+                description="Get weather data for a location",
+                tags=["weather", "location"],
+                input_schema={"location": "string"},
+                output_schema={
+                    "temperature": "number",
+                    "weather_condition": "string",
+                    "precipitation_chance": "number",
+                    "location": "string"
+                },
+                hooks=tool_hooks
+            ),
             lambda location: WeatherRetrieverTool.execute(location)
         )
         
         self.register_tool(
-            UmbrellaDeciderTool.get_tool_definition(),
+            Tool(
+                name="umbrella_decider",
+                description="Decide if an umbrella is needed based on weather data",
+                tags=["decision", "weather"],
+                input_schema={"weather_data": "object"},
+                output_schema={"needs_umbrella": "boolean"},
+                hooks=tool_hooks
+            ),
             lambda weather_data: UmbrellaDeciderTool.execute(weather_data)
         )
 
@@ -148,7 +186,7 @@ class UmbrellaAgent(Agent):
                         context={"task": task, "plan": plan}
                     )
                 
-                if self.verbosity == VerbosityLevel.HIGH:
+                if self.config.verbosity == VerbosityLevel.HIGH:
                     display_tool_result(tool_name, result)
                 
                 results.append((tool_name, result))
@@ -165,7 +203,7 @@ class UmbrellaAgent(Agent):
             
             self.current_task.output = result
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 display_final_result(result)
             
             return result
@@ -174,7 +212,7 @@ class UmbrellaAgent(Agent):
             self.current_task.error = str(e)
             self.current_task.status = "failed"
             
-            if self.verbosity == VerbosityLevel.HIGH:
+            if self.config.verbosity == VerbosityLevel.HIGH:
                 display_error(str(e))
             
             raise
