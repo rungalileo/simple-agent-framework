@@ -5,7 +5,8 @@ from datetime import datetime
 
 from .models import (
     AgentMetadata, TaskExecution, ExecutionStep, ToolCall,
-    Tool, ToolSelectionCriteria, ToolSelectionReasoning
+    Tool, ToolSelectionCriteria, ToolSelectionReasoning,
+    VerbosityLevel, TaskAnalysis
 )
 from .llm.base import LLMProvider
 from .llm.models import LLMMessage, LLMConfig, ToolSelectionOutput
@@ -20,6 +21,7 @@ class Agent(ABC):
         metadata: Optional[AgentMetadata] = None,
         tool_selection_criteria: Optional[ToolSelectionCriteria] = None,
         llm_provider: Optional[LLMProvider] = None,
+        verbosity: VerbosityLevel = VerbosityLevel.LOW
     ):
         self.agent_id = agent_id or str(uuid4())
         self.metadata = metadata or AgentMetadata(name=self.__class__.__name__)
@@ -29,6 +31,12 @@ class Agent(ABC):
         self.tool_implementations: Dict[str, Callable[..., Awaitable[Dict[str, Any]]]] = {}
         self.tool_selection_criteria = tool_selection_criteria or ToolSelectionCriteria()
         self.llm_provider = llm_provider
+        self.verbosity = verbosity
+
+    def log(self, message: str, level: VerbosityLevel = VerbosityLevel.LOW) -> None:
+        """Log a message if verbosity level is sufficient"""
+        if self.verbosity.value >= level.value:
+            print(message)
 
     def register_tool(
         self,
@@ -76,7 +84,7 @@ class Agent(ABC):
         
         system_prompt = (
             "You are an intelligent tool selection system. Your task is to analyze the input "
-            "and select the most appropriate tool based on the task requirements and tool capabilities. "
+            "and select the most appropriate tools based on the task requirements and tool capabilities. "
             "Consider the following aspects in your analysis:\n"
             "1. Task requirements and complexity\n"
             "2. Tool capabilities and limitations\n"
@@ -96,7 +104,7 @@ class Agent(ABC):
             LLMMessage(role="system", content=system_prompt),
             LLMMessage(
                 role="user",
-                content="Please select the most appropriate tool and provide your reasoning."
+                content="Please select the most appropriate tools and provide your reasoning."
             )
         ]
 
@@ -105,8 +113,8 @@ class Agent(ABC):
         context: Dict[str, Any],
         criteria: ToolSelectionCriteria,
         available_tools: List[Tool]
-    ) -> tuple[str, float, List[str]]:
-        """Use LLM to select appropriate tool"""
+    ) -> tuple[List[str], float, List[str]]:
+        """Use LLM to select appropriate tools"""
         if not self.llm_provider:
             raise RuntimeError("LLM provider not configured")
             
@@ -125,7 +133,7 @@ class Agent(ABC):
                     self.llm_provider.config
                 )
                 return (
-                    selection_output.selected_tool,
+                    selection_output.selected_tools,
                     selection_output.confidence,
                     selection_output.reasoning_steps
                 )
@@ -144,7 +152,7 @@ class Agent(ABC):
         )
         
         return (
-            selection_output.selected_tool,
+            selection_output.selected_tools,
             selection_output.confidence,
             selection_output.reasoning_steps
         )
@@ -154,31 +162,44 @@ class Agent(ABC):
         context: Dict[str, Any],
         criteria: Optional[ToolSelectionCriteria] = None
     ) -> ToolSelectionReasoning:
-        """Select the most appropriate tool based on context and criteria"""
+        """Select the most appropriate tools based on context and criteria"""
         criteria = criteria or self.tool_selection_criteria
         reasoning = ToolSelectionReasoning(
             context=context,
             considered_tools=list(self.tools.keys()),
             selection_criteria=criteria,
             reasoning_steps=[],
-            selected_tool="",
+            selected_tools=[],
             confidence_score=0.0
         )
         
         if self.llm_provider:
-            selected_tool, confidence, steps = await self._select_tool_with_llm(
+            selected_tools, confidence, steps = await self._select_tool_with_llm(
                 context,
                 criteria,
                 list(self.tools.values())
             )
+            
+            if self.verbosity == VerbosityLevel.HIGH:
+                self.log("\nTool Selection Process:", VerbosityLevel.HIGH)
+                self.log(f"Context: {context}", VerbosityLevel.HIGH)
+                self.log(f"Available Tools: {list(self.tools.keys())}", VerbosityLevel.HIGH)
+                self.log("\nReasoning Steps:", VerbosityLevel.HIGH)
+                for step in steps:
+                    self.log(f"- {step}", VerbosityLevel.HIGH)
+                self.log(f"\nSelected Tools: {selected_tools} (Confidence: {confidence:.2f})", VerbosityLevel.HIGH)
         else:
-            selected_tool, confidence, steps = self._select_tool(
+            selected_tools, confidence, steps = self._select_tool(
                 context,
                 criteria,
                 list(self.tools.values())
             )
+            
+            if self.verbosity == VerbosityLevel.HIGH:
+                self.log("\nFallback Tool Selection:", VerbosityLevel.HIGH)
+                self.log(f"Selected Tools: {selected_tools} (Confidence: {confidence:.2f})", VerbosityLevel.HIGH)
         
-        reasoning.selected_tool = selected_tool
+        reasoning.selected_tools = selected_tools
         reasoning.confidence_score = confidence
         reasoning.reasoning_steps = steps
         
@@ -190,10 +211,10 @@ class Agent(ABC):
         context: Dict[str, Any],
         criteria: ToolSelectionCriteria,
         available_tools: List[Tool]
-    ) -> tuple[str, float, List[str]]:
+    ) -> tuple[List[str], float, List[str]]:
         """
         Implementation of tool selection logic
-        Returns: (selected_tool_name, confidence_score, reasoning_steps)
+        Returns: (selected_tool_names, confidence_score, reasoning_steps)
         """
         pass
 
@@ -206,63 +227,142 @@ class Agent(ABC):
         selection_criteria: Optional[ToolSelectionCriteria] = None
     ) -> Dict[str, Any]:
         """Execute a tool and log the call with selection reasoning"""
-        # Validate tool exists
         if tool_name not in self.tools:
-            raise ValueError(f"Tool {tool_name} not registered")
+            raise ValueError(f"Tool {tool_name} not found")
             
-        # Generate tool selection reasoning if context provided
-        selection_reasoning = None
-        if context is not None:
-            selection_reasoning = await self.select_tool(context, selection_criteria)
-
-        tool_call = ToolCall(
-            tool_name=tool_name,
-            inputs=inputs,
-            execution_reasoning=execution_reasoning,
-            selection_reasoning=selection_reasoning
-        )
+        if self.verbosity == VerbosityLevel.HIGH:
+            self.log(f"\nExecuting Tool: {tool_name}", VerbosityLevel.HIGH)
+            self.log(f"Execution Reasoning: {execution_reasoning}", VerbosityLevel.HIGH)
+            self.log(f"Inputs: {inputs}", VerbosityLevel.HIGH)
         
+        result = await self._execute_tool(tool_name, inputs)
+        
+        if self.verbosity == VerbosityLevel.HIGH:
+            self.log(f"Tool Execution Result: {result}", VerbosityLevel.HIGH)
+        
+        return result
+
+    def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
+        """Create prompt for task planning"""
+        tools_description = "\n".join([
+            f"Tool: {tool.name}\n"
+            f"Description: {tool.description}\n"
+            f"Tags: {', '.join(tool.tags)}\n"
+            f"Input Schema: {tool.input_schema}\n"
+            f"Output Schema: {tool.output_schema}\n"
+            for tool in self.tools.values()
+        ])
+
+        system_prompt = (
+            "You are an intelligent task planning system. Your role is to:\n"
+            "1. Analyze the input task thoroughly\n"
+            "2. Identify key requirements and constraints\n"
+            "3. Evaluate available tools and their capabilities\n"
+            "4. Create a step-by-step execution plan\n"
+            "5. Show your chain of thought reasoning\n\n"
+            f"Available Tools:\n{tools_description}\n\n"
+            "Your response must be a JSON object matching this schema:\n"
+            f"{TaskAnalysis.model_json_schema()}\n\n"
+            "Think through each step carefully and explain your reasoning."
+        )
+
+        return [
+            LLMMessage(role="system", content=system_prompt),
+            LLMMessage(
+                role="user",
+                content=f"Task: {task}\n\nPlease analyze this task and create an execution plan."
+            )
+        ]
+
+    async def plan_task(self, task: str) -> TaskAnalysis:
+        """Create an execution plan for the task using chain of thought reasoning"""
+        if not self.llm_provider:
+            raise RuntimeError("LLM provider not configured")
+
+        messages = self._create_planning_prompt(task)
+        
+        if self.verbosity == VerbosityLevel.HIGH:
+            self.log("\nStarting Task Planning:", VerbosityLevel.HIGH)
+            self.log(f"Task: {task}", VerbosityLevel.HIGH)
+            self.log(f"Available Tools: {list(self.tools.keys())}", VerbosityLevel.HIGH)
+
         try:
-            # Execute the tool
-            implementation = self.tool_implementations[tool_name]
-            result = await self._execute_tool(tool_name, inputs)
-            tool_call.outputs = result
-            return result
+            plan = await self.llm_provider.generate_structured(
+                messages,
+                TaskAnalysis,
+                self.llm_provider.config
+            )
             
+            if self.verbosity == VerbosityLevel.HIGH:
+                self.log("\nTask Analysis:", VerbosityLevel.HIGH)
+                self.log(f"Input Analysis: {plan.input_analysis}", VerbosityLevel.HIGH)
+                self.log("\nChain of Thought:", VerbosityLevel.HIGH)
+                for step in plan.chain_of_thought:
+                    self.log(f"- {step}", VerbosityLevel.HIGH)
+                self.log("\nExecution Plan:", VerbosityLevel.HIGH)
+                for step in plan.execution_plan:
+                    self.log(f"- Tool: {step['tool']}", VerbosityLevel.HIGH)
+                    self.log(f"  Reasoning: {step['reasoning']}", VerbosityLevel.HIGH)
+            
+            return plan
         except Exception as e:
-            tool_call.success = False
-            tool_call.error = str(e)
+            if self.verbosity == VerbosityLevel.HIGH:
+                self.log(f"\nError in task planning: {str(e)}", VerbosityLevel.HIGH)
             raise
-        finally:
-            # Log the tool call in the current step
-            if self.current_task and self.current_task.steps:
-                self.current_task.steps[-1].tool_calls.append(tool_call)
 
     async def run(self, task: str) -> str:
         """Execute a task and return the result"""
-        # Initialize task execution record
         self.current_task = TaskExecution(
             task_id=str(uuid4()),
             agent_id=self.agent_id,
-            input=task
+            input=task,
+            start_time=datetime.now(),
+            steps=[]
         )
         
         try:
-            # Execute the task
-            result = await self._execute_task(task)
+            # First, create a plan using chain of thought reasoning
+            plan = await self.plan_task(task)
             
-            # Update task execution record
-            self.current_task.output = result
-            self.current_task.status = "completed"
-            self.current_task.end_time = datetime.utcnow()
+            # Execute each step in the plan
+            results = []
+            for step in plan.execution_plan:
+                tool_name = step["tool"]
+                if tool_name not in self.tools:
+                    raise ValueError(f"Tool {tool_name} not found")
+                
+                result = await self.call_tool(
+                    tool_name=tool_name,
+                    inputs={"text": task},
+                    execution_reasoning=step["reasoning"],
+                    context={"task": task, "plan": plan}
+                )
+                results.append((tool_name, result))
             
-            return result
-            
+            # Combine results from all tools
+            if len(results) > 1:
+                combined_result = "Task Analysis and Results:\n\n"
+                combined_result += f"Input Analysis: {plan.input_analysis}\n\n"
+                combined_result += "Tool Results:\n"
+                for tool_name, result in results:
+                    combined_result += f"\n{tool_name}:\n{result}\n"
+                self.current_task.output = combined_result
+                return combined_result
+            elif results:
+                self.current_task.output = results[0][1]
+                return results[0][1]
+            else:
+                self.current_task.output = "No tools were executed"
+                return "No tools were executed"
+                
         except Exception as e:
-            # Log failure and reraise
+            self.current_task.error = str(e)
             self.current_task.status = "failed"
-            self.current_task.end_time = datetime.utcnow()
             raise
+        finally:
+            self.current_task.end_time = datetime.now()
+            if self.current_task.status == "in_progress":
+                self.current_task.status = "completed"
 
     @abstractmethod
     async def _execute_task(self, task: str) -> str:
@@ -291,4 +391,4 @@ class Agent(ABC):
     @abstractmethod
     async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Implementation of tool execution logic"""
-        pass 
+        pass

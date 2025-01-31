@@ -26,24 +26,31 @@ class LLMConfig(BaseModel):
     custom_settings: Dict[str, Any] = Field(default_factory=dict)
 
 class ToolSelectionOutput(BaseModel):
-    """Structured output format for tool selection"""
-    selected_tool: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    task_analysis: str = Field(description="Analysis of the task requirements")
-    reasoning_steps: List[str] = Field(min_items=1)
+    """Output from tool selection"""
+    selected_tools: List[str] = Field(
+        description="Names of the selected tools in order of execution"
+    )
+    confidence: float = Field(
+        description="Confidence score for the tool selection (0-1)",
+        ge=0.0,
+        le=1.0
+    )
+    reasoning_steps: List[str] = Field(
+        description="List of reasoning steps that led to the tool selection"
+    )
 
     @classmethod
     def model_json_schema(cls) -> Dict[str, Any]:
         """Get JSON schema with example"""
         schema = super().model_json_schema()
         schema["examples"] = [{
-            "selected_tool": "text_analyzer",
+            "selected_tools": ["text_analyzer", "sentiment_analyzer"],
             "confidence": 0.9,
-            "task_analysis": "The task requires deep analysis of text complexity and structure",
             "reasoning_steps": [
-                "Task involves understanding text complexity",
+                "Task involves understanding text complexity and sentiment",
                 "Text analyzer provides detailed analysis capabilities",
-                "Other tools don't provide complexity metrics"
+                "Sentiment analyzer provides sentiment analysis capabilities",
+                "Other tools don't provide required capabilities"
             ]
         }]
-        return schema 
+        return schema

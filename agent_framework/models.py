@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+from enum import Enum
 
 class AgentMetadata(BaseModel):
     """Metadata associated with an agent"""
@@ -75,6 +76,12 @@ class ToolSelectionReasoning(BaseModel):
         le=1.0
     )
 
+class VerbosityLevel(str, Enum):
+    """Verbosity level for agent logging"""
+    NONE = "none"  # No logging
+    LOW = "low"    # Basic logging
+    HIGH = "high"  # Detailed logging including tool selection and reasoning
+
 class ToolCall(BaseModel):
     """Record of a tool invocation"""
     tool_name: str = Field(
@@ -105,6 +112,27 @@ class ToolCall(BaseModel):
     error: Optional[str] = Field(
         default=None,
         description="Error message if the tool execution failed"
+    )
+
+class TaskAnalysis(BaseModel):
+    """Analysis of a task using chain of thought reasoning"""
+    input_analysis: str = Field(
+        description="Analysis of the input, identifying key requirements and constraints"
+    )
+    available_tools: List[str] = Field(
+        description="List of tools available for the task"
+    )
+    tool_capabilities: Dict[str, List[str]] = Field(
+        description="Mapping of tools to their key capabilities"
+    )
+    execution_plan: List[Dict[str, Any]] = Field(
+        description="Ordered list of steps to execute, each with tool and reasoning"
+    )
+    requirements_coverage: Dict[str, List[str]] = Field(
+        description="How the identified requirements are covered by the planned steps"
+    )
+    chain_of_thought: List[str] = Field(
+        description="Chain of thought reasoning that led to this plan"
     )
 
 class ExecutionStep(BaseModel):

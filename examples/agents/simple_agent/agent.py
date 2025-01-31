@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 from agent_framework.agent import Agent
-from agent_framework.models import Tool, ToolSelectionCriteria
+from agent_framework.models import Tool, ToolSelectionCriteria, VerbosityLevel
 from agent_framework.llm.models import LLMConfig
 from agent_framework.llm.openai_provider import OpenAIProvider
 from agent_framework.config import load_config
@@ -13,6 +13,7 @@ class SimpleAgent(Agent):
     def __init__(
         self,
         *args,
+        verbosity: VerbosityLevel = VerbosityLevel.LOW,
         **kwargs
     ):
         # Load configuration
@@ -31,6 +32,7 @@ class SimpleAgent(Agent):
         super().__init__(
             *args,
             llm_provider=llm_provider,
+            verbosity=verbosity,
             **kwargs
         )
         
@@ -50,15 +52,16 @@ class SimpleAgent(Agent):
         context: Dict[str, Any],
         criteria: ToolSelectionCriteria,
         available_tools: List[Tool]
-    ) -> tuple[str, float, List[str]]:
-        # This is a fallback method if LLM is not available
+    ) -> tuple[List[str], float, List[str]]:
+        """Fallback method if LLM is not available"""
         return (
-            available_tools[0].name if available_tools else "",
+            [available_tools[0].name] if available_tools else [],
             0.5,
             ["Fallback selection: chose first available tool"]
         )
 
     async def _execute_task(self, task: str) -> str:
+        """Execute the task using available tools"""
         # Log the initial step
         self.log_step(
             step_type="task_received",
@@ -66,37 +69,27 @@ class SimpleAgent(Agent):
             intermediate_state={"task": task}
         )
         
-        # Example of tool usage with context
-        self.log_step(
-            step_type="processing",
-            description="Analyzing task requirements"
-        )
-        
-        # Call tool with context for selection reasoning
-        context = {
-            "task": task,
-            "requirements": ["analyze_complexity"],
-            "task_type": "analysis",
-            "input_length": len(task),
-            "expected_output": "text analysis with complexity metrics",
-            "processing_priority": "accuracy"
-        }
-        
-        result = await self.call_tool(
-            tool_name="text_analyzer",
-            inputs={"text": task},
-            execution_reasoning="Need to analyze task complexity",
-            context=context
-        )
-        
-        # Log final step and return
-        self.log_step(
-            step_type="completion",
-            description="Task completed successfully",
-            intermediate_state={"final_result": result}
-        )
-        
-        return f"Processed task: {task}"
+        # Let the base class handle planning and execution
+        try:
+            result = await super().run(task)
+            
+            # Log completion
+            self.log_step(
+                step_type="completion",
+                description="Task completed successfully",
+                intermediate_state={"final_result": result}
+            )
+            
+            return result
+            
+        except Exception as e:
+            # Log error
+            self.log_step(
+                step_type="error",
+                description=f"Error executing task: {str(e)}",
+                intermediate_state={"error": str(e)}
+            )
+            raise
 
     async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Implementation of tool execution logic"""
