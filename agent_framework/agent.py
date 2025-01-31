@@ -20,7 +20,6 @@ class Agent(ABC):
         metadata: Optional[AgentMetadata] = None,
         tool_selection_criteria: Optional[ToolSelectionCriteria] = None,
         llm_provider: Optional[LLMProvider] = None,
-        llm_config: Optional[LLMConfig] = None
     ):
         self.agent_id = agent_id or str(uuid4())
         self.metadata = metadata or AgentMetadata(name=self.__class__.__name__)
@@ -30,7 +29,6 @@ class Agent(ABC):
         self.tool_implementations: Dict[str, Callable[..., Awaitable[Dict[str, Any]]]] = {}
         self.tool_selection_criteria = tool_selection_criteria or ToolSelectionCriteria()
         self.llm_provider = llm_provider
-        self.llm_config = llm_config
 
     def register_tool(
         self,
@@ -124,7 +122,7 @@ class Agent(ABC):
                 selection_output = await self.llm_provider.generate_structured(
                     messages,
                     ToolSelectionOutput,
-                    self.llm_config
+                    self.llm_provider.config
                 )
                 return (
                     selection_output.selected_tool,
@@ -138,7 +136,7 @@ class Agent(ABC):
         # Regular generation with JSON parsing
         response = await self.llm_provider.generate(
             messages,
-            self.llm_config
+            self.llm_provider.config
         )
         
         selection_output = ToolSelectionOutput.model_validate_json(

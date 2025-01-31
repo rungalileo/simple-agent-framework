@@ -31,7 +31,6 @@ class UmbrellaAgent(Agent):
         super().__init__(
             *args,
             llm_provider=llm_provider,
-            llm_config=llm_config,
             **kwargs
         )
         

@@ -31,19 +31,18 @@ class SimpleAgent(Agent):
         super().__init__(
             *args,
             llm_provider=llm_provider,
-            llm_config=llm_config,
             **kwargs
         )
         
         # Register available tools
         self.register_tool(
             TextAnalyzerTool.get_tool_definition(),
-            lambda text: TextAnalyzerTool.execute(text, self.llm_config, self.llm_provider)
+            lambda text: TextAnalyzerTool.execute(text, self.llm_provider.config, self.llm_provider)
         )
         
         self.register_tool(
             KeywordExtractorTool.get_tool_definition(),
-            lambda text: KeywordExtractorTool.execute(text, self.llm_config, self.llm_provider)
+            lambda text: KeywordExtractorTool.execute(text, self.llm_provider.config, self.llm_provider)
         )
 
     def _select_tool(
