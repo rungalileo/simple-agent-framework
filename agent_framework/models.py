@@ -186,4 +186,8 @@ class TaskExecution(BaseModel):
     status: str = Field(
         default="in_progress",
         description="Current status of the task (e.g., 'in_progress', 'completed', 'failed')"
-    ) 
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Error message if the task execution failed"
+    )

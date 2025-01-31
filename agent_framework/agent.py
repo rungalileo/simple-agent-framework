@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 from uuid import uuid4
 from datetime import datetime
+import json
 
 from .models import (
     AgentMetadata, TaskExecution, ExecutionStep, ToolCall,
@@ -11,6 +12,11 @@ from .models import (
 from .llm.base import LLMProvider
 from .llm.models import LLMMessage, LLMConfig, ToolSelectionOutput
 from .llm.openai_provider import OpenAIProvider
+from .utils.formatting import (
+    display_task_header, display_analysis, display_chain_of_thought,
+    display_execution_plan, display_tool_result, display_final_result,
+    display_error
+)
 
 class Agent(ABC):
     """Base class for all agents in the framework"""
@@ -242,6 +248,18 @@ class Agent(ABC):
         
         return result
 
+    async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Implementation of tool execution logic.
+        
+        This is the default implementation that executes tools based on their registered implementations.
+        Override this method if you need custom tool execution logic.
+        """
+        if tool_name not in self.tool_implementations:
+            raise ValueError(f"Tool {tool_name} not registered")
+        
+        implementation = self.tool_implementations[tool_name]
+        return await implementation(**inputs)
+
     def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
         """Create prompt for task planning"""
         tools_description = "\n".join([
@@ -254,23 +272,46 @@ class Agent(ABC):
         ])
 
         system_prompt = (
-            "You are an intelligent task planning system. Your role is to:\n"
-            "1. Analyze the input task thoroughly\n"
-            "2. Identify key requirements and constraints\n"
-            "3. Evaluate available tools and their capabilities\n"
-            "4. Create a step-by-step execution plan\n"
-            "5. Show your chain of thought reasoning\n\n"
+            "You are an intelligent task planning system. Your role is to analyze tasks and create detailed execution plans.\n\n"
+            "You MUST provide a complete response with ALL of the following components:\n\n"
+            "1. input_analysis: A thorough analysis of the task requirements and constraints\n"
+            "2. available_tools: List of all tools that could potentially be used\n"
+            "3. tool_capabilities: A mapping of each available tool to its key capabilities\n"
+            "4. execution_plan: A list of steps, where each step has:\n"
+            "   - tool: The name of the tool to use\n"
+            "   - reasoning: Why this tool was chosen for this step\n"
+            "5. requirements_coverage: How each requirement is covered by which tools\n"
+            "6. chain_of_thought: Your step-by-step reasoning process\n\n"
             f"Available Tools:\n{tools_description}\n\n"
-            "Your response must be a JSON object matching this schema:\n"
-            f"{TaskAnalysis.model_json_schema()}\n\n"
-            "Think through each step carefully and explain your reasoning."
+            "Your response MUST be a JSON object with this EXACT structure:\n"
+            "{\n"
+            '  "input_analysis": "detailed analysis of the task",\n'
+            '  "available_tools": ["tool1", "tool2"],\n'
+            '  "tool_capabilities": {\n'
+            '    "tool1": ["capability1", "capability2"],\n'
+            '    "tool2": ["capability3"]\n'
+            "  },\n"
+            '  "execution_plan": [\n'
+            '    {"tool": "tool1", "reasoning": "why tool1 is used"},\n'
+            '    {"tool": "tool2", "reasoning": "why tool2 is used"}\n'
+            "  ],\n"
+            '  "requirements_coverage": {\n'
+            '    "requirement1": ["tool1"],\n'
+            '    "requirement2": ["tool1", "tool2"]\n'
+            "  },\n"
+            '  "chain_of_thought": [\n'
+            '    "step 1 reasoning",\n'
+            '    "step 2 reasoning"\n'
+            "  ]\n"
+            "}\n\n"
+            "Ensure ALL fields are present and properly formatted. Missing fields will cause errors."
         )
 
         return [
             LLMMessage(role="system", content=system_prompt),
             LLMMessage(
                 role="user",
-                content=f"Task: {task}\n\nPlease analyze this task and create an execution plan."
+                content=f"Task: {task}\n\nAnalyze this task and create a complete execution plan with ALL required fields."
             )
         ]
 
@@ -282,9 +323,7 @@ class Agent(ABC):
         messages = self._create_planning_prompt(task)
         
         if self.verbosity == VerbosityLevel.HIGH:
-            self.log("\nStarting Task Planning:", VerbosityLevel.HIGH)
-            self.log(f"Task: {task}", VerbosityLevel.HIGH)
-            self.log(f"Available Tools: {list(self.tools.keys())}", VerbosityLevel.HIGH)
+            display_task_header(task)
 
         try:
             plan = await self.llm_provider.generate_structured(
@@ -294,20 +333,14 @@ class Agent(ABC):
             )
             
             if self.verbosity == VerbosityLevel.HIGH:
-                self.log("\nTask Analysis:", VerbosityLevel.HIGH)
-                self.log(f"Input Analysis: {plan.input_analysis}", VerbosityLevel.HIGH)
-                self.log("\nChain of Thought:", VerbosityLevel.HIGH)
-                for step in plan.chain_of_thought:
-                    self.log(f"- {step}", VerbosityLevel.HIGH)
-                self.log("\nExecution Plan:", VerbosityLevel.HIGH)
-                for step in plan.execution_plan:
-                    self.log(f"- Tool: {step['tool']}", VerbosityLevel.HIGH)
-                    self.log(f"  Reasoning: {step['reasoning']}", VerbosityLevel.HIGH)
+                display_analysis(plan.input_analysis)
+                display_chain_of_thought(plan.chain_of_thought)
+                display_execution_plan(plan.execution_plan)
             
             return plan
         except Exception as e:
             if self.verbosity == VerbosityLevel.HIGH:
-                self.log(f"\nError in task planning: {str(e)}", VerbosityLevel.HIGH)
+                display_error(str(e))
             raise
 
     async def run(self, task: str) -> str:
@@ -331,38 +364,72 @@ class Agent(ABC):
                 if tool_name not in self.tools:
                     raise ValueError(f"Tool {tool_name} not found")
                 
+                # Get the tool's input schema
+                tool = self.tools[tool_name]
+                required_inputs = tool.input_schema.get("properties", {})
+                
+                # If the tool expects a single text input, use the task
+                if len(required_inputs) == 1 and list(required_inputs.keys())[0] in ["text", "input", "content"]:
+                    inputs = {list(required_inputs.keys())[0]: task}
+                # If the tool expects a location, use the task as location
+                elif len(required_inputs) == 1 and "location" in required_inputs:
+                    inputs = {"location": task}
+                # For other cases, let the agent implementation handle input mapping
+                else:
+                    inputs = await self._map_inputs_to_tool(tool_name, task, step.get("input_mapping", {}))
+                
                 result = await self.call_tool(
                     tool_name=tool_name,
-                    inputs={"text": task},
+                    inputs=inputs,
                     execution_reasoning=step["reasoning"],
                     context={"task": task, "plan": plan}
                 )
+                
+                if self.verbosity == VerbosityLevel.HIGH:
+                    display_tool_result(tool_name, result)
+                
                 results.append((tool_name, result))
             
-            # Combine results from all tools
-            if len(results) > 1:
-                combined_result = "Task Analysis and Results:\n\n"
-                combined_result += f"Input Analysis: {plan.input_analysis}\n\n"
-                combined_result += "Tool Results:\n"
-                for tool_name, result in results:
-                    combined_result += f"\n{tool_name}:\n{result}\n"
-                self.current_task.output = combined_result
-                return combined_result
-            elif results:
-                self.current_task.output = results[0][1]
-                return results[0][1]
-            else:
-                self.current_task.output = "No tools were executed"
-                return "No tools were executed"
+            # Create markdown output
+            markdown_output = []
+            markdown_output.append("# Task Analysis and Results\n")
+            markdown_output.append(f"## Input Analysis\n{plan.input_analysis}\n")
+            markdown_output.append("## Tool Results\n")
+            
+            for tool_name, result in results:
+                markdown_output.append(f"### {tool_name}\n")
+                if isinstance(result, (dict, list)):
+                    markdown_output.append("```json\n")
+                    markdown_output.append(json.dumps(result, indent=2))
+                    markdown_output.append("\n```\n")
+                else:
+                    markdown_output.append(str(result) + "\n")
+            
+            combined_result = "\n".join(markdown_output)
+            self.current_task.output = combined_result
+            
+            if self.verbosity == VerbosityLevel.HIGH:
+                display_final_result(combined_result)
+            
+            return combined_result
                 
         except Exception as e:
             self.current_task.error = str(e)
             self.current_task.status = "failed"
+            
+            if self.verbosity == VerbosityLevel.HIGH:
+                display_error(str(e))
+            
             raise
         finally:
             self.current_task.end_time = datetime.now()
             if self.current_task.status == "in_progress":
                 self.current_task.status = "completed"
+
+    async def _map_inputs_to_tool(self, tool_name: str, task: str, input_mapping: Dict[str, str]) -> Dict[str, Any]:
+        """Map task input to tool-specific inputs. Override this in agent implementations."""
+        # Default implementation for backward compatibility
+        return {"text": task}
 
     @abstractmethod
     async def _execute_task(self, task: str) -> str:
@@ -387,8 +454,3 @@ class Agent(ABC):
             intermediate_state=intermediate_state
         )
         self.current_task.steps.append(step)
-
-    @abstractmethod
-    async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Implementation of tool execution logic"""
-        pass

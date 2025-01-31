@@ -1,8 +1,10 @@
 import asyncio
+from agent_framework.models import VerbosityLevel
+
 from examples.agents.umbrella_agent.agent import UmbrellaAgent
 
 async def main():
-    agent = UmbrellaAgent()
+    agent = UmbrellaAgent(verbosity=VerbosityLevel.HIGH)
     result = await agent.run("Houston, TX")
     print(result)
 
