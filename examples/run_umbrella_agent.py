@@ -1,22 +1,30 @@
 import asyncio
-from agent_framework.models import VerbosityLevel
-from agent_framework.utils.logging import AgentLogger
+from agent_framework.config import AgentConfiguration
+from agent_framework.factory import AgentFactory
 from examples.agents.umbrella_agent.agent import UmbrellaAgent
+from agent_framework.models import VerbosityLevel
 
 async def main():
-    agent_logger = AgentLogger(agent_id="umbrella_agent")
-
-    # Create agent with HIGH verbosity to see all logs
-    agent = UmbrellaAgent(
-        verbosity=VerbosityLevel.LOW,
-        logger=agent_logger,
-        metadata={"env": "example", "location": "Houston, TX"}
+    # Load configuration from environment with required keys
+    config = AgentConfiguration.from_env(
+        required_keys=["openai", "weather"],
     )
     
-    # Run the agent
-    result = await agent.run("Houston, TX")
-    print("\nFinal Result:")
-    print(result)
+    # Override specific settings
+    config = config.with_overrides(
+        verbosity=VerbosityLevel.HIGH,
+        enable_logging=False,
+        metadata={"location": "Houston, TX"}
+    )
+    
+    # Create factory and agent
+    factory = AgentFactory(config)
+    agent = factory.create_agent(
+        agent_class=UmbrellaAgent,
+        agent_id="umbrella_agent"
+    )
+    
+    await agent.run("Houston, TX")
 
 if __name__ == "__main__":
     asyncio.run(main())

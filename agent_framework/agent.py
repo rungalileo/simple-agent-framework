@@ -4,6 +4,10 @@ from uuid import uuid4
 from datetime import datetime
 import json
 from .utils.logging import AgentLogger
+from .utils.tool_registry import ToolRegistry
+from rich.panel import Panel
+from rich.json import JSON
+from rich.console import Console
 
 from .models import (
     AgentMetadata, TaskExecution, ExecutionStep, ToolCall,
@@ -18,6 +22,7 @@ from .utils.formatting import (
     display_execution_plan, display_tool_result, display_final_result,
     display_error
 )
+from .exceptions import ToolNotFoundError, ToolExecutionError
 
 class Agent(ABC):
     """Base class for all agents in the framework"""
@@ -40,8 +45,7 @@ class Agent(ABC):
             metadata=metadata or {}
         )
         self.llm_provider = llm_provider
-        self.tools: Dict[str, Tool] = {}
-        self.tool_implementations: Dict[str, Callable[..., Awaitable[Dict[str, Any]]]] = {}
+        self.tool_registry = ToolRegistry()
         self.current_task: Optional[TaskExecution] = None
         self.state: Dict[str, Any] = {}
         self.message_history: List[Dict[str, Any]] = []
@@ -50,15 +54,6 @@ class Agent(ABC):
         """Log a message if verbosity level is sufficient"""
         if self.config.verbosity.value >= level.value:
             print(message)
-
-    def register_tool(
-        self,
-        tool: Tool,
-        implementation: Callable
-    ) -> None:
-        """Register a tool and its implementation"""
-        self.tools[tool.name] = tool
-        self.tool_implementations[tool.name] = implementation
 
     def _create_tool_context(self, tool_name: str, inputs: Dict[str, Any]) -> ToolContext:
         """Create a context object for tool execution"""
@@ -88,10 +83,10 @@ class Agent(ABC):
         selection_criteria: Optional[ToolSelectionCriteria] = None
     ) -> Dict[str, Any]:
         """Execute a tool and log the call with selection reasoning"""
-        if tool_name not in self.tools:
+        tool = self.tool_registry.get_tool(tool_name)
+        if not tool:
             raise ValueError(f"Tool {tool_name} not found")
         
-        tool = self.tools[tool_name]
         tool_context = self._create_tool_context(tool_name, inputs)
         
         try:
@@ -99,7 +94,7 @@ class Agent(ABC):
             if tool.hooks:
                 await tool.hooks.before_execution(tool_context)
             
-            # Execute the tool
+            # Execute the tool using registry
             result = await self._execute_tool(tool_name, inputs)
             
             # Record the execution
@@ -117,11 +112,28 @@ class Agent(ABC):
                 await tool.hooks.after_execution(tool_context, result)
             
             # Display if high verbosity
-            if self.config.verbosity == VerbosityLevel.HIGH:
-                self.log(f"\nExecuting Tool: {tool_name}", VerbosityLevel.HIGH)
-                self.log(f"Execution Reasoning: {execution_reasoning}", VerbosityLevel.HIGH)
-                self.log(f"Inputs: {inputs}", VerbosityLevel.HIGH)
-                self.log(f"Tool Execution Result: {result}", VerbosityLevel.HIGH)
+            # if self.config.verbosity == VerbosityLevel.HIGH:
+            #     console = Console()
+                
+            #     # Convert Pydantic models to dicts for JSON serialization
+            #     json_context = {k: v.model_dump() if hasattr(v, 'model_dump') else v 
+            #                   for k, v in context.items()}
+                
+            #     content = [
+            #         f"[bold]Tool:[/bold] {tool_name}",
+            #         "[bold]Inputs:[/bold]",
+            #         console.print(json.dumps(inputs, indent=2), style="cyan"),
+            #         "[bold]Execution Reasoning:[/bold]",
+            #         execution_reasoning,
+            #         "[bold]Context:[/bold]",
+            #         console.print(json.dumps(json_context, indent=2), style="cyan")
+            #     ]
+                
+            #     console.print(Panel(
+            #         "\n".join(str(line) for line in content),
+            #         title="Tool Execution",
+            #         border_style="blue"
+            #     ))
             
             return result
             
@@ -258,7 +270,7 @@ class Agent(ABC):
         criteria = criteria or self.tool_selection_criteria
         reasoning = ToolSelectionReasoning(
             context=context,
-            considered_tools=list(self.tools.keys()),
+            considered_tools=list(self.tool_registry.get_all_tools().keys()),
             selection_criteria=criteria,
             reasoning_steps=[],
             selected_tools=[],
@@ -269,13 +281,13 @@ class Agent(ABC):
             selected_tools, confidence, steps = await self._select_tool_with_llm(
                 context,
                 criteria,
-                list(self.tools.values())
+                list(self.tool_registry.get_all_tools().values())
             )
             
             if self.config.verbosity == VerbosityLevel.HIGH:
                 self.log("\nTool Selection Process:", VerbosityLevel.HIGH)
                 self.log(f"Context: {context}", VerbosityLevel.HIGH)
-                self.log(f"Available Tools: {list(self.tools.keys())}", VerbosityLevel.HIGH)
+                self.log(f"Available Tools: {list(self.tool_registry.get_all_tools().keys())}", VerbosityLevel.HIGH)
                 self.log("\nReasoning Steps:", VerbosityLevel.HIGH)
                 for step in steps:
                     self.log(f"- {step}", VerbosityLevel.HIGH)
@@ -284,7 +296,7 @@ class Agent(ABC):
             selected_tools, confidence, steps = self._select_tool(
                 context,
                 criteria,
-                list(self.tools.values())
+                list(self.tool_registry.get_all_tools().values())
             )
             
             if self.config.verbosity == VerbosityLevel.HIGH:
@@ -306,7 +318,6 @@ class Agent(ABC):
         
         return reasoning
 
-    @abstractmethod
     def _select_tool(
         self,
         context: Dict[str, Any],
@@ -314,22 +325,34 @@ class Agent(ABC):
         available_tools: List[Tool]
     ) -> tuple[List[str], float, List[str]]:
         """
-        Implementation of tool selection logic
+        Default fallback tool selection logic.
         Returns: (selected_tool_names, confidence_score, reasoning_steps)
         """
-        pass
+        # Default to selecting first available tool with low confidence
+        if available_tools:
+            return (
+                [available_tools[0].name],
+                0.5,
+                ["Fallback selection: using first available tool"]
+            )
+        return ([], 0.0, ["No tools available"])
 
     async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Implementation of tool execution logic.
-        
-        This is the default implementation that executes tools based on their registered implementations.
-        Override this method if you need custom tool execution logic.
-        """
-        if tool_name not in self.tool_implementations:
-            raise ValueError(f"Tool {tool_name} not registered")
-        
-        implementation = self.tool_implementations[tool_name]
-        return await implementation(**inputs)
+        """Execute a tool with given inputs"""
+        tool_impl = self.tool_registry.get_implementation(tool_name)
+        if not tool_impl:
+            raise ToolNotFoundError(f"No implementation found for tool: {tool_name}")
+            
+        try:
+            tool_instance = tool_impl()
+            result = await tool_instance.execute(**inputs)
+            
+            # Store result in state
+            self.state.set_tool_result(tool_name, result)
+            
+            return result
+        except Exception as e:
+            raise ToolExecutionError(tool_name, e)
 
     def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
         """Create prompt for task planning"""
@@ -339,7 +362,7 @@ class Agent(ABC):
             f"Tags: {', '.join(tool.tags)}\n"
             f"Input Schema: {tool.input_schema}\n"
             f"Output Schema: {tool.output_schema}\n"
-            for tool in self.tools.values()
+            for tool in self.tool_registry.get_all_tools().values()
         ])
 
         system_prompt = (
@@ -448,40 +471,21 @@ class Agent(ABC):
             steps=[]
         )
         
-        # Log task start
-        if self.config.logger:
-            self.config.logger.info(
-                "Starting task execution",
-                task=task,
-                task_id=self.current_task.task_id,
-                agent_id=self.agent_id
-            )
-        
         try:
-            # First, create a plan using chain of thought reasoning
+            # Create a plan using chain of thought reasoning
             plan = await self.plan_task(task)
             
             # Execute each step in the plan
             results = []
             for step in plan.execution_plan:
                 tool_name = step["tool"]
-                if tool_name not in self.tools:
-                    raise ValueError(f"Tool {tool_name} not found")
+                if not self.tool_registry.get_tool(tool_name):
+                    raise ToolNotFoundError(f"Tool {tool_name} not found")
                 
-                # Get the tool's input schema
-                tool = self.tools[tool_name]
-                required_inputs = tool.input_schema.get("properties", {})
+                # Map inputs for the tool
+                inputs = await self._map_inputs_to_tool(tool_name, task, step.get("input_mapping", {}))
                 
-                # If the tool expects a single text input, use the task
-                if len(required_inputs) == 1 and list(required_inputs.keys())[0] in ["text", "input", "content"]:
-                    inputs = {list(required_inputs.keys())[0]: task}
-                # If the tool expects a location, use the task as location
-                elif len(required_inputs) == 1 and "location" in required_inputs:
-                    inputs = {"location": task}
-                # For other cases, let the agent implementation handle input mapping
-                else:
-                    inputs = await self._map_inputs_to_tool(tool_name, task, step.get("input_mapping", {}))
-                
+                # Execute the tool
                 result = await self.call_tool(
                     tool_name=tool_name,
                     inputs=inputs,
@@ -494,38 +498,15 @@ class Agent(ABC):
                 
                 results.append((tool_name, result))
             
-            # Create markdown output
-            markdown_output = []
-            markdown_output.append("# Task Analysis and Results\n")
-            markdown_output.append(f"## Input Analysis\n{plan.input_analysis}\n")
-            markdown_output.append("## Tool Results\n")
-            
-            for tool_name, result in results:
-                markdown_output.append(f"### {tool_name}\n")
-                if isinstance(result, (dict, list)):
-                    markdown_output.append("```json\n")
-                    markdown_output.append(json.dumps(result, indent=2))
-                    markdown_output.append("\n```\n")
-                else:
-                    markdown_output.append(str(result) + "\n")
-            
-            combined_result = "\n".join(markdown_output)
-            self.current_task.output = combined_result
+            # Format final result
+            result = await self._format_result(task, results)
+            self.current_task.output = result
             
             if self.config.verbosity == VerbosityLevel.HIGH:
-                display_final_result(combined_result)
+                display_final_result(result)
             
-            # Log task completion
-            if self.config.logger:
-                self.config.logger.info(
-                    "Task execution completed",
-                    task_id=self.current_task.task_id,
-                    result=combined_result,
-                    execution_time=(datetime.now() - self.current_task.start_time).total_seconds()
-                )
+            return result
             
-            return combined_result
-                
         except Exception as e:
             self.current_task.error = str(e)
             self.current_task.status = "failed"
@@ -539,12 +520,44 @@ class Agent(ABC):
             if self.current_task.status == "in_progress":
                 self.current_task.status = "completed"
 
-    async def _map_inputs_to_tool(self, tool_name: str, task: str, input_mapping: Dict[str, str]) -> Dict[str, Any]:
-        """Map task input to tool-specific inputs. Override this in agent implementations."""
-        # Default implementation for backward compatibility
-        return {"text": task}
-
     @abstractmethod
-    async def _execute_task(self, task: str) -> str:
-        """Implementation of task execution logic"""
+    async def _format_result(self, task: str, results: List[tuple[str, Dict[str, Any]]]) -> str:
+        """Format the final result from tool executions"""
         pass
+
+    async def _map_inputs_to_tool(self, tool_name: str, task: str, input_mapping: Dict[str, str]) -> Dict[str, Any]:
+        """Map inputs based on tool schema"""
+        tool = self.tool_registry.get_tool(tool_name)
+        if not tool:
+            raise ToolNotFoundError(f"Tool {tool_name} not found")
+        
+        # Get the tool's input schema
+        required_inputs = tool.input_schema.get("properties", {})
+        
+        # If there's an explicit mapping from the LLM, use it
+        if input_mapping:
+            return {k: self.state.get_variable(v, v) for k, v in input_mapping.items()}
+        
+        # Try to map inputs based on schema and state
+        mapped_inputs = {}
+        for input_name, input_schema in required_inputs.items():
+            # Check for referenced tool outputs in schema
+            if "$ref" in input_schema:
+                ref_tool = input_schema.get("$ref").split("/")[-1]  # Get referenced type name
+                # Look for any tool result that matches this type
+                for tool_name, result in self.state.tool_results.items():
+                    if result and isinstance(result, dict):  # Basic type check
+                        mapped_inputs[input_name] = result
+                        break
+            # Otherwise try direct mapping
+            elif self.state.has_tool_result(input_name):
+                mapped_inputs[input_name] = self.state.get_tool_result(input_name)
+            elif self.state.has_variable(input_name):
+                mapped_inputs[input_name] = self.state.get_variable(input_name)
+            elif input_schema.get("type") == "string":
+                mapped_inputs[input_name] = task
+        
+        if mapped_inputs:
+            return mapped_inputs
+            
+        raise ValueError(f"Could not map inputs for tool {tool_name}")

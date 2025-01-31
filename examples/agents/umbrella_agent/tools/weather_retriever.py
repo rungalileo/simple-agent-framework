@@ -1,44 +1,16 @@
-from typing import Dict, Any
+from typing import Dict, Any, ClassVar
+from agent_framework.tools.base import BaseTool
 import aiohttp
-from agent_framework.models import Tool
 from agent_framework.config import load_config
+from .schemas import WeatherRetrieverInput, WeatherRetrieverOutput, WeatherRetrieverMetadata
 
-class WeatherRetrieverTool:
-    """Tool for retrieving weather data for a given location using WeatherAPI.com"""
+class WeatherRetrieverTool(BaseTool):
+    """Tool for retrieving weather data"""
     
-    @staticmethod
-    def get_tool_definition() -> Tool:
-        return Tool(
-            name="weather_retriever",
-            description="Retrieves current weather data for a given location",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The location to get weather data for"
-                    }
-                },
-                "required": ["location"]
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"},
-                    "precipitation_chance": {"type": "number"},
-                    "weather_condition": {"type": "string"},
-                    "temperature": {"type": "number"}
-                },
-                "required": ["location", "precipitation_chance", "weather_condition"]
-            },
-            tags=["weather", "data-retrieval"]
-        )
+    metadata = WeatherRetrieverMetadata
     
-    @staticmethod
-    async def execute(location: str) -> Dict[str, Any]:
-        """
-        Retrieves weather data from WeatherAPI.com
-        """
+    async def execute(self, location: str) -> Dict[str, Any]:
+        """Execute the tool with given inputs"""
         config = load_config()
         api_key = config.get("weather_api_key")
         if not api_key:
