@@ -1,89 +1,136 @@
-# Simple Agent Framework
+# Agent Framework
 
-A lightweight framework for building AI agents with LLM capabilities.
+A flexible framework for building AI agents with tool-based capabilities.
 
-## Getting Started
+## Overview
 
-### Installation
+The Agent Framework provides a structured way to build AI agents that can use tools to accomplish tasks. Each agent:
+- Has its own set of tools
+- Manages its own state
+- Has its own prompt templates
+- Can be configured via environment variables or code
 
-```bash
-pip install -r requirements.txt
+## Creating an Agent
+
+Here's how to create a new agent:
+
+1. Create the agent directory structure:
+```
+your_agent/
+├── __init__.py
+├── agent.py           # Agent implementation
+├── templates/         # Agent-specific templates
+│   └── planning.j2    # Planning prompt template
+└── tools/            # Agent's tools
+    ├── __init__.py
+    ├── tool_one.py
+    └── tool_two.py
 ```
 
-### Basic Usage
-
-1. Create a new agent by subclassing the base `Agent` class:
-
+2. Define your agent class:
 ```python
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
 from agent_framework.agent import Agent
-from agent_framework.llm.models import LLMConfig
-from agent_framework.llm.openai_provider import OpenAIProvider
+from agent_framework.state import AgentState
 
-class MyAgent(Agent):
+class YourAgent(Agent):
     def __init__(self, *args, **kwargs):
-        # Configure LLM provider
-        llm_config = LLMConfig(
-            model="gpt-4",
-            temperature=0.7
-        )
-        llm_provider = OpenAIProvider(
-            config=llm_config,
-            api_key="your_api_key"
+        super().__init__(*args, **kwargs)
+        self.state = AgentState()
+        
+        # Set up template environment
+        template_dir = Path(__file__).parent / "templates"
+        self.template_env = Environment(
+            loader=FileSystemLoader(template_dir),
+            trim_blocks=True,
+            lstrip_blocks=True
         )
         
-        super().__init__(
-            *args,
-            llm_provider=llm_provider,
-            **kwargs
+        self._register_tools()
+    
+    def _register_tools(self) -> None:
+        """Register agent-specific tools"""
+        self.tool_registry.register(
+            metadata=ToolOne.get_metadata(),
+            implementation=ToolOne
         )
+        # Register other tools...
 ```
 
-2. Register tools that your agent can use:
-
+3. Create your tools:
 ```python
-from agent_framework.models import Tool
+from agent_framework.tools.base import BaseTool
+from pydantic import BaseModel
 
-# Define a tool
-my_tool = Tool(
-    name="example_tool",
-    description="A tool that does something",
-    parameters={
-        "input_text": "The text to process"
-    }
+class ToolOneInput(BaseModel):
+    param1: str
+    param2: int
+
+class ToolOne(BaseTool):
+    name = "tool_one"
+    description = "Does something specific"
+    tags = ["category1", "category2"]
+    input_schema = ToolOneInput.model_json_schema()
+    
+    async def execute(self, param1: str, param2: int) -> Dict[str, Any]:
+        # Tool implementation
+        return {"result": "some result"}
+```
+
+## Using the Agent
+
+1. Set up configuration:
+```python
+from agent_framework.config import AgentConfiguration
+from agent_framework.models import VerbosityLevel
+
+# Load config with required API keys
+config = AgentConfiguration.from_env(
+    required_keys=["openai"]  # List required API keys
 )
 
-# Implement the tool's functionality
-async def tool_implementation(text):
-    # Your tool logic here
-    return {"result": processed_text}
-
-# Register the tool with your agent
-agent.register_tool(
-    my_tool,
-    tool_implementation
+# Override settings as needed
+config = config.with_overrides(
+    verbosity=VerbosityLevel.HIGH,
+    enable_logging=False,
+    metadata={"custom": "value"}
 )
 ```
 
-3. Run your agent:
-
+2. Create and run the agent:
 ```python
-async def main():
-    agent = MyAgent()
-    result = await agent.run("Perform a task using the available tools")
-    print(f"Result: {result}")
+from agent_framework.factory import AgentFactory
+
+# Create factory with config
+factory = AgentFactory(config)
+
+# Create agent instance
+agent = factory.create_agent(
+    agent_class=YourAgent,
+    agent_id="unique_id"
+)
+
+# Run the agent
+result = await agent.run("your task here")
 ```
 
-## Examples
+## Environment Variables
 
-The framework includes two example implementations:
+Required variables:
+- `OPENAI_API_KEY`: Your OpenAI API key
+- Other API keys as needed by your agent
 
-1. **SimpleAgent**: A basic agent that demonstrates core functionality with text analysis tools.
-   - See `examples/agents/simple_agent/agent.py`
-   - Run with `python examples/run_simple_agent.py`
+Optional variables:
+- `LLM_MODEL`: Model to use (default: "gpt-4")
+- `LLM_TEMPERATURE`: Temperature setting (default: 0.1)
+- `VERBOSITY`: Logging verbosity (low/medium/high)
+- `ENABLE_LOGGING`: Enable/disable logging
+- `ENVIRONMENT`: Environment name (development/production)
 
-2. **UmbrellaAgent**: A more complex agent that can coordinate multiple sub-agents.
-   - See `examples/agents/umbrella_agent/agent.py`
-   - Run with `python examples/run_umbrella_agent.py`
+## Example
+
+See the `examples/agents/umbrella_agent` for a complete example of an agent that determines if you need an umbrella based on weather data.
 
 ## Key Components
 
