@@ -5,7 +5,6 @@ from jinja2 import Environment, FileSystemLoader
 from agent_framework.agent import Agent
 
 from agent_framework.llm.models import LLMMessage
-from agent_framework.utils.logging import LoggingToolHooks
 from agent_framework.state import AgentState
 
 from .tools.weather_retriever import WeatherRetrieverTool
@@ -45,7 +44,7 @@ class UmbrellaAgent(Agent):
         # Set hooks after registration if logger is available
         if self.config.logger:
             for tool in self.tool_registry.list_tools():
-                tool.hooks = LoggingToolHooks(self.config.logger)
+                tool.hooks = self.config.logger.get_tool_hooks()
 
     def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
         """Create a custom planning prompt for the umbrella agent"""

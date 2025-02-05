@@ -11,11 +11,11 @@ from rich.console import Console
 
 from .models import (
     AgentMetadata, TaskExecution, ExecutionStep, ToolCall,
-    Tool, ToolSelectionCriteria, ToolSelectionReasoning,
-    VerbosityLevel, TaskAnalysis, ToolContext, ToolHooks, ToolSelectionHooks, AgentConfig
+    Tool, VerbosityLevel, TaskAnalysis, ToolContext, ToolHooks,
+    ToolSelectionHooks, AgentConfig
 )
 from .llm.base import LLMProvider
-from .llm.models import LLMMessage, LLMConfig, ToolSelectionOutput
+from .llm.models import LLMMessage, LLMConfig
 from .llm.openai_provider import OpenAIProvider
 from .utils.formatting import (
     display_task_header, display_analysis, display_chain_of_thought,
@@ -40,7 +40,6 @@ class Agent(ABC):
         self.agent_id = str(uuid4())
         self.config = AgentConfig(
             verbosity=verbosity,
-            logger=logger,
             tool_selection_hooks=tool_selection_hooks,
             metadata=metadata or {}
         )
@@ -49,6 +48,19 @@ class Agent(ABC):
         self.current_task: Optional[TaskExecution] = None
         self.state: Dict[str, Any] = {}
         self.message_history: List[Dict[str, Any]] = []
+        self.logger = logger
+
+    def _setup_logger(self) -> None:
+        """Create and set up the logger after tools are registered"""
+        logger = GalileoLogger(agent_id="umbrella_agent")
+        self.config.logger = logger  # Set in config
+        
+        # Set hooks for all registered tools
+        for tool in self.tool_registry.list_tools():
+            tool.hooks = logger.get_tool_hooks()
+        
+        # Set tool selection hooks
+        self.tool_selection_hooks = logger.get_tool_selection_hooks()
 
     def log(self, message: str, level: VerbosityLevel = VerbosityLevel.LOW) -> None:
         """Log a message if verbosity level is sufficient"""
@@ -64,6 +76,7 @@ class Agent(ABC):
             task=self.current_task.input,
             tool_name=tool_name,
             inputs=inputs,
+            available_tools=self.tool_registry.get_formatted_tools(),
             previous_tools=[step.tool_name for step in self.current_task.steps],
             previous_results=[step.result for step in self.current_task.steps if step.result],
             previous_errors=[step.error for step in self.current_task.steps if step.error],
@@ -79,8 +92,7 @@ class Agent(ABC):
         tool_name: str,
         inputs: Dict[str, Any],
         execution_reasoning: str,
-        context: Dict[str, Any],
-        selection_criteria: Optional[ToolSelectionCriteria] = None
+        context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Execute a tool and log the call with selection reasoning"""
         tool = self.tool_registry.get_tool(tool_name)
@@ -111,30 +123,6 @@ class Agent(ABC):
             if tool.hooks:
                 await tool.hooks.after_execution(tool_context, result)
             
-            # Display if high verbosity
-            # if self.config.verbosity == VerbosityLevel.HIGH:
-            #     console = Console()
-                
-            #     # Convert Pydantic models to dicts for JSON serialization
-            #     json_context = {k: v.model_dump() if hasattr(v, 'model_dump') else v 
-            #                   for k, v in context.items()}
-                
-            #     content = [
-            #         f"[bold]Tool:[/bold] {tool_name}",
-            #         "[bold]Inputs:[/bold]",
-            #         console.print(json.dumps(inputs, indent=2), style="cyan"),
-            #         "[bold]Execution Reasoning:[/bold]",
-            #         execution_reasoning,
-            #         "[bold]Context:[/bold]",
-            #         console.print(json.dumps(json_context, indent=2), style="cyan")
-            #     ]
-                
-            #     console.print(Panel(
-            #         "\n".join(str(line) for line in content),
-            #         title="Tool Execution",
-            #         border_style="blue"
-            #     ))
-            
             return result
             
         except Exception as e:
@@ -142,200 +130,6 @@ class Agent(ABC):
             if tool.hooks:
                 await tool.hooks.after_execution(tool_context, None, error=e)
             raise
-
-    def _create_tool_selection_prompt(
-        self,
-        context: Dict[str, Any],
-        criteria: ToolSelectionCriteria,
-        available_tools: List[Tool]
-    ) -> List[LLMMessage]:
-        """Create prompt for tool selection"""
-        task = context.get("task", "")
-        requirements = context.get("requirements", [])
-        
-        tools_description = "\n".join([
-            f"Tool: {tool.name}\n"
-            f"Description: {tool.description}\n"
-            f"Tags: {', '.join(tool.tags)}\n"
-            f"Input Schema: {tool.input_schema}\n"
-            f"Output Schema: {tool.output_schema}\n"
-            for tool in available_tools
-        ])
-        
-        criteria_description = (
-            f"Required tags: {criteria.required_tags}\n"
-            f"Preferred tags: {criteria.preferred_tags}\n"
-            f"Context requirements: {criteria.context_requirements}\n"
-            f"Custom rules: {criteria.custom_rules}"
-        )
-        
-        context_description = f"""
- Task: {task}
- Requirements: {', '.join(requirements)}
- Additional Context:
- {chr(10).join(f'- {k}: {v}' for k, v in context.items() if k not in ['task', 'requirements'])}
- """
-
-        output_schema = ToolSelectionOutput.model_json_schema()
-        
-        system_prompt = (
-            "You are an intelligent tool selection system. Your task is to analyze the input "
-            "and select the most appropriate tools based on the task requirements and tool capabilities. "
-            "Consider the following aspects in your analysis:\n"
-            "1. Task requirements and complexity\n"
-            "2. Tool capabilities and limitations\n"
-            "3. Input/output compatibility\n"
-            "4. Specific context requirements\n\n"
-            f"Available Tools:\n{tools_description}\n\n"
-            f"Selection Criteria:\n{criteria_description}\n\n"
-            f"Context:\n{context_description}\n\n"
-            "Provide a thorough analysis of the task and justify your tool selection. "
-            "Consider edge cases and potential limitations of each tool.\n\n"
-            "Provide your response as a JSON object matching this schema:\n"
-            f"{output_schema}\n\n"
-            "Ensure your response is valid JSON and matches the schema exactly."
-        )
-        
-        return [
-            LLMMessage(role="system", content=system_prompt),
-            LLMMessage(
-                role="user",
-                content="Please select the most appropriate tools and provide your reasoning."
-            )
-        ]
-
-    async def _select_tool_with_llm(
-        self,
-        context: Dict[str, Any],
-        criteria: ToolSelectionCriteria,
-        available_tools: List[Tool]
-    ) -> tuple[List[str], float, List[str]]:
-        """Use LLM to select appropriate tools"""
-        if not self.llm_provider:
-            raise RuntimeError("LLM provider not configured")
-            
-        messages = self._create_tool_selection_prompt(
-            context,
-            criteria,
-            available_tools
-        )
-        
-        # Log the prompt and context
-        if self.config.logger:
-            self.config.logger.info(
-                "Creating tool selection prompt",
-                prompt_messages=messages,
-                context=context,
-                criteria=criteria.model_dump(),
-                available_tools=[tool.name for tool in available_tools]
-            )
-        
-        try:
-            # Try using structured output with function calling
-            if isinstance(self.llm_provider, OpenAIProvider):
-                selection_output = await self.llm_provider.generate_structured(
-                    messages,
-                    ToolSelectionOutput,
-                    self.llm_provider.config
-                )
-                
-                # Log the LLM response
-                if self.config.logger:
-                    self.config.logger.info(
-                        "Received tool selection response",
-                        selection_output=selection_output.model_dump(),
-                        task_id=self.current_task.task_id if self.current_task else None
-                    )
-                
-                return (
-                    selection_output.selected_tools,
-                    selection_output.confidence,
-                    selection_output.reasoning_steps
-                )
-        except Exception as e:
-            if self.config.logger:
-                self.config.logger.error(
-                    "Failed to generate structured tool selection",
-                    error=str(e),
-                    task_id=self.current_task.task_id if self.current_task else None
-                )
-            raise
-
-    async def select_tool(
-        self,
-        context: Dict[str, Any],
-        criteria: Optional[ToolSelectionCriteria] = None
-    ) -> ToolSelectionReasoning:
-        """Select the most appropriate tools based on context and criteria"""
-        criteria = criteria or self.tool_selection_criteria
-        reasoning = ToolSelectionReasoning(
-            context=context,
-            considered_tools=list(self.tool_registry.get_all_tools().keys()),
-            selection_criteria=criteria,
-            reasoning_steps=[],
-            selected_tools=[],
-            confidence_score=0.0
-        )
-        
-        if self.llm_provider:
-            selected_tools, confidence, steps = await self._select_tool_with_llm(
-                context,
-                criteria,
-                list(self.tool_registry.get_all_tools().values())
-            )
-            
-            if self.config.verbosity == VerbosityLevel.HIGH:
-                self.log("\nTool Selection Process:", VerbosityLevel.HIGH)
-                self.log(f"Context: {context}", VerbosityLevel.HIGH)
-                self.log(f"Available Tools: {list(self.tool_registry.get_all_tools().keys())}", VerbosityLevel.HIGH)
-                self.log("\nReasoning Steps:", VerbosityLevel.HIGH)
-                for step in steps:
-                    self.log(f"- {step}", VerbosityLevel.HIGH)
-                self.log(f"\nSelected Tools: {selected_tools} (Confidence: {confidence:.2f})", VerbosityLevel.HIGH)
-        else:
-            selected_tools, confidence, steps = self._select_tool(
-                context,
-                criteria,
-                list(self.tool_registry.get_all_tools().values())
-            )
-            
-            if self.config.verbosity == VerbosityLevel.HIGH:
-                self.log("\nFallback Tool Selection:", VerbosityLevel.HIGH)
-                self.log(f"Selected Tools: {selected_tools} (Confidence: {confidence:.2f})", VerbosityLevel.HIGH)
-        
-        reasoning.selected_tools = selected_tools
-        reasoning.confidence_score = confidence
-        reasoning.reasoning_steps = steps
-        
-        # Call after_selection hook if available
-        if self.config.tool_selection_hooks:
-            await self.config.tool_selection_hooks.after_selection(
-                self._create_tool_context("", {}),
-                selected_tools,
-                confidence,
-                steps
-            )
-        
-        return reasoning
-
-    def _select_tool(
-        self,
-        context: Dict[str, Any],
-        criteria: ToolSelectionCriteria,
-        available_tools: List[Tool]
-    ) -> tuple[List[str], float, List[str]]:
-        """
-        Default fallback tool selection logic.
-        Returns: (selected_tool_names, confidence_score, reasoning_steps)
-        """
-        # Default to selecting first available tool with low confidence
-        if available_tools:
-            return (
-                [available_tools[0].name],
-                0.5,
-                ["Fallback selection: using first available tool"]
-            )
-        return ([], 0.0, ["No tools available"])
 
     async def _execute_tool(self, tool_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool with given inputs"""
@@ -417,31 +211,22 @@ class Agent(ABC):
         messages = self._create_planning_prompt(task)
         
         # Log the planning prompt
-        if self.config.logger:
-            self.config.logger.info(
-                "Creating task planning prompt",
-                prompt_messages=messages,
-                task=task,
-                task_id=self.current_task.task_id if self.current_task else None
-            )
+        if self.logger:
+            self.logger.on_agent_start(task)
         
         if self.config.verbosity == VerbosityLevel.HIGH:
             display_task_header(task)
 
         try:
-            plan = await self.llm_provider.generate_structured(
+            plan: TaskAnalysis = await self.llm_provider.generate_structured(
                 messages,
                 TaskAnalysis,
                 self.llm_provider.config
             )
             
             # Log the planning response
-            if self.config.logger:
-                self.config.logger.info(
-                    "Received task planning response",
-                    plan=plan.model_dump(),
-                    task_id=self.current_task.task_id if self.current_task else None
-                )
+            if self.logger:
+                self.logger.on_agent_planning(plan.input_analysis)
             
             if self.config.verbosity == VerbosityLevel.HIGH:
                 display_analysis(plan.input_analysis)
@@ -450,8 +235,8 @@ class Agent(ABC):
             
             return plan
         except Exception as e:
-            if self.config.logger:
-                self.config.logger.error(
+            if self.logger:
+                self.logger.error(
                     "Failed to generate task plan",
                     error=str(e),
                     task=task,
@@ -473,32 +258,19 @@ class Agent(ABC):
         
         try:
             # Create a plan using chain of thought reasoning
-            plan = await self.plan_task(task)
+            plan: TaskAnalysis = await self.plan_task(task)
             
             # Execute each step in the plan
             results = []
             for step in plan.execution_plan:
-                tool_name = step["tool"]
-                if not self.tool_registry.get_tool(tool_name):
-                    raise ToolNotFoundError(f"Tool {tool_name} not found")
-                
-                # Map inputs for the tool
-                inputs = await self._map_inputs_to_tool(tool_name, task, step.get("input_mapping", {}))
-                
-                # Execute the tool
-                result = await self.call_tool(
-                    tool_name=tool_name,
-                    inputs=inputs,
-                    execution_reasoning=step["reasoning"],
-                    context={"task": task, "plan": plan}
-                )
+                result = await self._execute_step(step, task, plan)
                 
                 if self.config.verbosity == VerbosityLevel.HIGH:
-                    display_tool_result(tool_name, result)
+                    display_tool_result(step["tool"], result)
                 
-                results.append((tool_name, result))
+                results.append((step["tool"], result))
             
-            # Format final result
+            # Format final result only after all tools have completed
             result = await self._format_result(task, results)
             self.current_task.output = result
             
@@ -519,6 +291,37 @@ class Agent(ABC):
             self.current_task.end_time = datetime.now()
             if self.current_task.status == "in_progress":
                 self.current_task.status = "completed"
+
+    async def _execute_step(self, step: Dict[str, Any], task: str, plan: TaskAnalysis) -> Any:
+        """Execute a single step in the plan"""
+        tool_name = step["tool"]
+        if not self.tool_registry.get_tool(tool_name):
+            raise ToolNotFoundError(f"Tool {tool_name} not found")
+        
+        # Map inputs for the tool
+        inputs = await self._map_inputs_to_tool(tool_name, task, step.get("input_mapping", {}))
+        
+        # Create tool context once for both calls
+        tool_context = self._create_tool_context(tool_name, inputs)
+        
+        # Log tool selection first
+        if self.logger:
+            await self.logger.get_tool_selection_hooks().after_selection(
+                tool_context,
+                tool_name,
+                1.0,
+                [step["reasoning"]]
+            )
+        
+        # Then execute the tool
+        result = await self.call_tool(
+            tool_name=tool_name,
+            inputs=inputs,
+            execution_reasoning=step["reasoning"],
+            context={"task": task, "plan": plan}
+        )
+        
+        return result
 
     @abstractmethod
     async def _format_result(self, task: str, results: List[tuple[str, Dict[str, Any]]]) -> str:

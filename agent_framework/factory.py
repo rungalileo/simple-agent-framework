@@ -2,7 +2,7 @@ from typing import Optional, Type
 from .config import AgentConfiguration
 from .llm.base import LLMProvider
 from .llm.openai_provider import OpenAIProvider
-from .utils.logging import AgentLogger
+from .utils.logging import ConsoleAgentLogger
 from .agent import Agent
 
 class AgentFactory:
@@ -11,7 +11,7 @@ class AgentFactory:
     def __init__(self, config: AgentConfiguration):
         self.config = config
         self._llm_provider: Optional[LLMProvider] = None
-        self._logger: Optional[AgentLogger] = None
+        self._logger: Optional[ConsoleAgentLogger] = None
     
     def get_llm_provider(self) -> LLMProvider:
         """Get or create LLM provider"""
@@ -25,10 +25,10 @@ class AgentFactory:
                 raise ValueError("No LLM provider configured")
         return self._llm_provider
     
-    def get_logger(self, agent_id: str) -> Optional[AgentLogger]:
+    def get_logger(self, agent_id: str) -> Optional[ConsoleAgentLogger]:
         """Get logger if enabled"""
         if self.config.enable_logging:
-            return AgentLogger(agent_id)
+            return ConsoleAgentLogger(agent_id)
         return None
     
     def create_agent(

@@ -33,6 +33,7 @@ class ToolContext:
     agent_id: str = field(metadata={"description": "ID of the agent executing the tool"})
     task_id: str = field(metadata={"description": "ID of the current task"})
     start_time: datetime = field(metadata={"description": "When the task started"})
+    available_tools: List[Dict[str, Any]] = field(metadata={"description": "List of tools available for the task"})
     metadata: Dict[str, Any] = field(metadata={"description": "Additional metadata from agent configuration"})
 
 @dataclass
@@ -200,10 +201,10 @@ class AgentConfig:
         default=VerbosityLevel.LOW,
         metadata={"description": "Level of detail to display to the user"}
     )
-    logger: Optional[AgentLogger] = field(
-        default=None,
-        metadata={"description": "Optional logger for recording agent activity"}
-    )
+    # logger: Optional[AgentLogger] = field(
+    #     default=None,
+    #     metadata={"description": "Optional logger for recording agent activity"}
+    # )
     tool_selection_hooks: Optional[ToolSelectionHooks] = field(
         default=None,
         metadata={"description": "Hooks for tool selection lifecycle"}

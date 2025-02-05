@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Any
 from dataclasses import dataclass, field
 from ..models import Tool
 from ..tools.base import BaseTool
@@ -51,3 +51,37 @@ class ToolRegistry:
     def get_all_tools(self) -> Dict[str, Tool]:
         """Get all registered tools"""
         return self.tools.copy() 
+
+    def get_formatted_tools(self) -> List[Dict[str, Any]]:
+        """Format tools into OpenAI function calling format
+        
+        Returns a list of tools formatted as:
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": tool_schema.properties,
+                    "required": tool_schema.required
+                }
+            }
+        }
+        """
+        formatted_tools = []
+        for tool in self.list_tools():
+            tool_schema = tool.input_schema
+            formatted_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": tool_schema.get("properties", {}),
+                        "required": tool_schema.get("required", [])
+                    }
+                }
+            })
+        return formatted_tools

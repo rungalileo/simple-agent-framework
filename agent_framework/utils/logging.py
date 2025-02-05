@@ -8,9 +8,9 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.box import ROUNDED
 import json
+from abc import ABC, abstractmethod
+from agent_framework.utils.hooks import ToolHooks, ToolSelectionHooks
 
-from .hooks import ToolContext, ToolHooks, ToolSelectionHooks
-from ..llm.models import LLMMessage
 
 # Create a custom theme for our logger
 theme = Theme({
@@ -26,146 +26,98 @@ theme = Theme({
 
 console = Console(theme=theme)
 
-class AgentLogger:
-    """Logger for recording agent activity"""
+class AgentLogger(ABC):
+    """Abstract base class for agent logging"""
     
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
-        
+
+    @abstractmethod
     def info(self, message: str, **kwargs) -> None:
         """Log an informational message"""
-        timestamp = datetime.utcnow().isoformat()
+        pass
         
-        # Convert LLMMessages to dict for serialization
-        processed_kwargs = {}
-        for key, value in kwargs.items():
-            if key == "prompt_messages" and isinstance(value, list):
-                processed_kwargs[key] = [
-                    {"role": msg.role, "content": msg.content}
-                    for msg in value
-                ]
-            else:
-                processed_kwargs[key] = value
-        
-        log_entry = {
-            "timestamp": timestamp,
-            "agent_id": self.agent_id,
-            "level": "INFO",
-            "message": message,
-            **processed_kwargs
-        }
-        self._write_log(log_entry)
-        
+    @abstractmethod
     def warning(self, message: str, **kwargs) -> None:
         """Log a warning message"""
-        timestamp = datetime.utcnow().isoformat()
-        log_entry = {
-            "timestamp": timestamp,
-            "agent_id": self.agent_id,
-            "level": "WARNING",
-            "message": message,
-            **kwargs
-        }
-        self._write_log(log_entry)
+        pass
         
+    @abstractmethod
     def error(self, message: str, **kwargs) -> None:
         """Log an error message"""
-        timestamp = datetime.utcnow().isoformat()
-        log_entry = {
-            "timestamp": timestamp,
-            "agent_id": self.agent_id,
-            "level": "ERROR",
-            "message": message,
-            **kwargs
-        }
-        self._write_log(log_entry)
+        pass
         
+    @abstractmethod
     def debug(self, message: str, **kwargs) -> None:
         """Log a debug message"""
-        timestamp = datetime.utcnow().isoformat()
-        log_entry = {
-            "timestamp": timestamp,
-            "agent_id": self.agent_id,
-            "level": "DEBUG",
-            "message": message,
-            **kwargs
-        }
-        self._write_log(log_entry)
+        pass
+
+    @abstractmethod
+    def _write_log(self, log_entry: Dict[str, Any]) -> None:
+        """Write a log entry"""
+        pass
+
+    @abstractmethod
+    def _sanitize_for_json(self, obj: Any) -> Any:
+        """Sanitize an object for JSON serialization"""
+        pass
+
+    @abstractmethod
+    def on_agent_planning(self, planning_prompt: str) -> None:
+        """Log the agent planning prompt"""
+        pass
+
+    @abstractmethod
+    def on_agent_start(self, initial_task: str) -> None:
+        """Log the agent execution prompt"""
+        pass
+
+    @abstractmethod
+    def get_tool_hooks(self) -> ToolHooks:
+        """Get tool hooks for this logger"""
+        pass
+
+    @abstractmethod
+    def get_tool_selection_hooks(self) -> ToolSelectionHooks:
+        """Get tool selection hooks for this logger"""
+        pass
+    
+class ConsoleAgentLogger(AgentLogger):
+    """Console implementation of agent logger"""
+    
+    def info(self, message: str, **kwargs) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"[timestamp]{timestamp}[/timestamp] [info]INFO[/info]: {message}")
+        if kwargs:
+            console.print(Panel(json.dumps(kwargs, indent=2), title="Additional Info"))
+            
+    def warning(self, message: str, **kwargs) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"[timestamp]{timestamp}[/timestamp] [warning]WARNING[/warning]: {message}")
+        if kwargs:
+            console.print(Panel(json.dumps(kwargs, indent=2), title="Additional Info"))
+            
+    def error(self, message: str, **kwargs) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"[timestamp]{timestamp}[/timestamp] [error]ERROR[/error]: {message}")
+        if kwargs:
+            console.print(Panel(json.dumps(kwargs, indent=2), title="Additional Info"))
+            
+    def debug(self, message: str, **kwargs) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"[timestamp]{timestamp}[/timestamp] [dim]DEBUG[/dim]: {message}")
+        if kwargs:
+            console.print(Panel(json.dumps(kwargs, indent=2), title="Additional Info"))
 
     def _write_log(self, log_entry: Dict[str, Any]) -> None:
-        """Write log entry to storage/file"""
-        # For now, just print the JSON log entry
-        # In a real implementation, this would write to a file or database
-        try:
-            print(f"LOG: {json.dumps(log_entry)}")
-        except TypeError as e:
-            # If serialization fails, try to convert problematic values to strings
-            sanitized_entry = self._sanitize_for_json(log_entry)
-            print(f"LOG: {json.dumps(sanitized_entry)}")
-            
+        pass  # Console logger doesn't need to write to file
+
     def _sanitize_for_json(self, obj: Any) -> Any:
-        """Recursively sanitize an object for JSON serialization"""
-        if isinstance(obj, dict):
-            return {key: self._sanitize_for_json(value) for key, value in obj.items()}
-        elif isinstance(obj, list):
-            return [self._sanitize_for_json(item) for item in obj]
-        elif isinstance(obj, (str, int, float, bool, type(None))):
+        if isinstance(obj, (str, int, float, bool, type(None))):
             return obj
+        elif isinstance(obj, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {str(k): self._sanitize_for_json(v) for k, v in obj.items()}
         else:
-            # Convert any other type to string representation
             return str(obj)
-
-class LoggingToolHooks(ToolHooks):
-    """Tool hooks that log execution details"""
-    
-    def __init__(self, logger: AgentLogger):
-        self.logger = logger
-        
-    async def before_execution(self, context: ToolContext) -> None:
-        """Log before tool execution"""
-        self.logger.info(
-            f"Executing tool: {context.tool_name}",
-            inputs=context.inputs,
-            task_id=context.task_id
-        )
-        
-    async def after_execution(
-        self,
-        context: ToolContext,
-        result: Any,
-        error: Optional[Exception] = None
-    ) -> None:
-        """Log after tool execution"""
-        if error:
-            self.logger.error(
-                f"Tool execution failed: {context.tool_name}",
-                error=str(error),
-                task_id=context.task_id
-            )
-        else:
-            self.logger.info(
-                f"Tool execution completed: {context.tool_name}",
-                result=result,
-                task_id=context.task_id
-            )
-
-class LoggingToolSelectionHooks(ToolSelectionHooks):
-    """Tool selection hooks that log selection details"""
-    
-    def __init__(self, logger: AgentLogger):
-        self.logger = logger
-        
-    async def after_selection(
-        self,
-        context: ToolContext,
-        selected_tool: str,
-        confidence: float,
-        reasoning: List[str]
-    ) -> None:
-        """Log tool selection details"""
-        self.logger.info(
-            f"Selected tool: {selected_tool}",
-            confidence=confidence,
-            reasoning=reasoning,
-            task_id=context.task_id
-        )
