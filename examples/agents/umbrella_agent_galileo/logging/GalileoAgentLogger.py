@@ -28,6 +28,16 @@ def format_messages(messages: Sequence[Union[LLMMessage, Dict[str, Any]]]) -> Li
     if not messages:
         return []
         
+    def format_value(v: Any) -> Any:
+        """Format a value for JSON serialization"""
+        if isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, dict):
+            return {k: format_value(v) for k, v in v.items()}
+        if isinstance(v, list):
+            return [format_value(x) for x in v]
+        return v
+
     formatted = []
     for msg in messages:
         if isinstance(msg, LLMMessage):
@@ -42,8 +52,8 @@ def format_messages(messages: Sequence[Union[LLMMessage, Dict[str, Any]]]) -> Li
                     "role": "tool",
                     "content": json.dumps({
                         "tool_name": msg.get("tool_name", ""),
-                        "inputs": msg.get("inputs", {}),
-                        "result": msg.get("result", {}),
+                        "inputs": format_value(msg.get("inputs", {})),
+                        "result": format_value(msg.get("result", {})),
                         "reasoning": msg.get("reasoning", "")
                     })
                 })
@@ -51,7 +61,7 @@ def format_messages(messages: Sequence[Union[LLMMessage, Dict[str, Any]]]) -> Li
                 # For other messages, keep the role and content if available
                 formatted.append({
                     "role": msg.get("role", "user"),
-                    "content": msg.get("content", json.dumps(msg))
+                    "content": msg.get("content", json.dumps(format_value(msg)))
                 })
     return formatted
 
@@ -67,393 +77,263 @@ def ensure_valid_io(data: Any) -> str:
         return json.dumps({"role": data.role, "content": data.content})
     return json.dumps({"content": str(data)})
 
-class LogEvent:
-    """Represents a single logging event"""
-    def __init__(self, event_type: str, name: str, input: Any, output: Any, metadata: Dict[str, Any], tools: Optional[List[Dict[str, Any]]] = None, model: Optional[str] = None):
-        self.event_type = event_type  # 'llm' or 'tool'
+class Event:
+    """Represents a single logging event with ordering metadata"""
+    def __init__(self, type: str, name: str, input: Any, output: Any, metadata: Dict[str, Any], 
+                 tools: Optional[List[Dict[str, Any]]] = None, model: Optional[str] = None):
+        self.type = type  # 'llm' or 'tool'
         self.name = name
-        self.input = input
-        self.output = output
-        self.metadata = metadata
+        self.input = self._ensure_valid_io(input)
+        self.output = self._ensure_valid_io(output)
+        self.metadata = metadata or {}
         self.tools = tools
-        self.model = model
+        self.model = model or "gpt-4o"
 
-class QueuedLogger:
-    """Singleton class that maintains a queue of logging events"""
-    _instance = None
-    _lock = asyncio.Lock()
-    _events: List[LogEvent] = []
-    _is_processing = False
-    _current_workflow = None
-    _processing_lock = asyncio.Lock()
-    _event_counter = 0  # Global event counter
-    _start_time = None
+    @staticmethod
+    def _ensure_valid_io(data: Any) -> str:
+        """Ensure data is in a valid format for Galileo Step IO"""
+        if data is None:
+            return "{}"
+        if isinstance(data, str):
+            return data
+        if isinstance(data, datetime):
+            return json.dumps(data.isoformat())
+        if isinstance(data, (dict, list)):
+            # Handle nested structures that might contain datetime objects
+            def format_value(v: Any) -> Any:
+                if isinstance(v, datetime):
+                    return v.isoformat()
+                if isinstance(v, dict):
+                    return {k: format_value(v) for k, v in v.items()}
+                if isinstance(v, list):
+                    return [format_value(x) for x in v]
+                return v
+            return json.dumps(format_value(data))
+        if isinstance(data, LLMMessage):
+            return json.dumps({"role": data.role, "content": data.content})
+        return json.dumps({"content": str(data)})
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._start_time = datetime.now()
-        return cls._instance
+class EventQueue:
+    """Manages ordered event processing for Galileo logging"""
+    def __init__(self):
+        self._events: List[Event] = []
+        self._counter = 0
+        self._start_time = datetime.now()
+        self._lock = asyncio.Lock()
+        self._processing = False
+        self._workflow = None
 
-    @classmethod
-    async def get_next_order(cls) -> Dict[str, Any]:
-        """Get next event order metadata"""
-        async with cls._lock:
-            cls._event_counter += 1
-            # Calculate timestamp with microsecond precision for strict ordering
-            timestamp = (datetime.now() - cls._start_time).total_seconds()
-            return {
-                "sequence": str(cls._event_counter),
+    def set_workflow(self, workflow: AsyncWorkflowWrapper):
+        """Set the current workflow for logging"""
+        print(f"Setting workflow: {id(workflow)}")
+        self._workflow = workflow
+
+    async def add(self, event: Event):
+        """Add an event with ordering metadata and process queue"""
+        # Add ordering metadata
+        async with self._lock:
+            self._counter += 1
+            timestamp = (datetime.now() - self._start_time).total_seconds()
+            event.metadata.update({
+                "sequence": str(self._counter),
                 "timestamp": str(timestamp),
                 "type": "event"
-            }
+            })
+            print(f"Queueing event: {event.name} (sequence: {event.metadata['sequence']})")
+            self._events.append(event)
+        
+        # Process queue outside of lock
+        await self._process_queue()
 
-    @classmethod
-    def set_workflow(cls, workflow: 'AsyncWorkflowWrapper'):
-        """Set the current workflow for logging"""
-        print(f"[QueuedLogger] Setting workflow: {id(workflow)}")
-        cls._current_workflow = workflow
-
-    @classmethod
-    async def queue_event(cls, event: LogEvent):
-        """Add an event to the queue and process it"""
-        if not event.metadata:
-            event.metadata = {}
-            
-        # Merge order metadata with existing metadata
-        order_metadata = await cls.get_next_order()
-        event.metadata.update(order_metadata)
-            
-        print(f"[QueuedLogger] Queueing event: type={event.event_type}, name={event.name}, sequence={event.metadata.get('sequence')}, timestamp={event.metadata.get('timestamp')}")
-        async with cls._lock:
-            cls._events.append(event)
-            print(f"[QueuedLogger] Current queue length: {len(cls._events)}")
-            if not cls._is_processing:
-                print("[QueuedLogger] Starting event processing")
-                await cls._process_events()
-            else:
-                print("[QueuedLogger] Event processing already in progress")
-
-    @classmethod
-    async def _process_events(cls):
-        """Process all events in the queue in order"""
-        if cls._current_workflow is None:
-            print("[QueuedLogger] Warning: No workflow set, events will be dropped")
+    async def _process_queue(self):
+        """Process events in order"""
+        if not self._workflow:
+            print("No workflow set, skipping event processing")
             return
 
-        async with cls._processing_lock:
-            if cls._is_processing:
-                print("[QueuedLogger] Already processing events, skipping")
+        if self._processing:
+            print("Already processing events")
+            return
+            
+        async with self._lock:
+            if not self._events:
                 return
                 
-            cls._is_processing = True
-            print(f"[QueuedLogger] Starting to process {len(cls._events)} events")
+            self._processing = True
             try:
-                # Sort events by sequence number before processing
-                cls._events.sort(key=lambda e: int(e.metadata.get('sequence', '0')))
-                print(f"[QueuedLogger] Events sorted by sequence: {[(e.name, e.metadata.get('sequence')) for e in cls._events]}")
+                # Sort events by sequence number
+                self._events.sort(key=lambda e: int(e.metadata["sequence"]))
+                print(f"Processing {len(self._events)} events")
                 
-                while cls._events:
-                    event = cls._events[0]
-                    print(f"[QueuedLogger] Processing event: type={event.event_type}, name={event.name}, sequence={event.metadata.get('sequence')}, timestamp={event.metadata.get('timestamp')}")
+                # Process each event
+                while self._events:
+                    event = self._events[0]
                     try:
-                        if event.event_type == 'llm':
-                            event.output = ensure_valid_io(event.output)
-                            event.input = ensure_valid_io(event.input)
-                            print(f"[QueuedLogger] Adding LLM step: {event.name}")
-                            await cls._current_workflow.add_llm(
+                        print(f"Processing event: {event.name}")
+                        if event.type == 'llm':
+                            await self._workflow.add_llm(
                                 name=event.name,
                                 input=event.input,
                                 output=event.output,
                                 tools=event.tools,
-                                model=event.model or "gpt-4o",
+                                model=event.model,
                                 metadata=event.metadata
                             )
-                            # Wait a small amount to ensure Galileo processes in order
-                            await asyncio.sleep(0.1)
-                        elif event.event_type == 'tool':
-                            event.output = ensure_valid_io(event.output)
-                            event.input = ensure_valid_io(event.input)
-                            print(f"[QueuedLogger] Adding Tool step: {event.name}")
-                            await cls._current_workflow.add_tool(
+                        else:  # tool
+                            await self._workflow.add_tool(
                                 name=event.name,
                                 input=event.input,
                                 output=event.output,
                                 metadata=event.metadata
                             )
-                            # Wait a small amount to ensure Galileo processes in order
-                            await asyncio.sleep(0.1)
-                        print(f"[QueuedLogger] Successfully processed event: {event.name}")
-                        cls._events.pop(0)
+                        print(f"Successfully processed event: {event.name}")
+                        self._events.pop(0)
                     except Exception as e:
-                        print(f"[QueuedLogger] Error processing event {event.name}: {e}")
-                        cls._events.pop(0)
+                        print(f"Error processing event {event.name}: {e}")
+                        self._events.pop(0)
+                    await asyncio.sleep(0.1)  # Ensure Galileo processes in order
             finally:
-                cls._is_processing = False
-                print("[QueuedLogger] Finished processing events")
+                self._processing = False
+                print("Finished processing events")
 
 class AsyncWorkflowWrapper:
-    """Async wrapper for Galileo workflow operations"""
-    
+    """Simple wrapper for Galileo workflow operations"""
     def __init__(self, workflow: AgentStep):
         self._workflow = workflow
 
-    async def add_llm(self, **kwargs):
-        """Execute add_llm operation directly"""
-        return self._workflow.add_llm(**kwargs)
+    async def add_llm(self, **kwargs): return self._workflow.add_llm(**kwargs)
+    async def add_tool(self, **kwargs): return self._workflow.add_tool(**kwargs)
+    async def conclude(self, **kwargs): return self._workflow.conclude(**kwargs)
 
-    async def add_tool(self, **kwargs):
-        """Execute add_tool operation directly"""
-        return self._workflow.add_tool(**kwargs)
-
-    async def conclude(self, **kwargs):
-        """Execute conclude operation directly"""
-        return self._workflow.conclude(**kwargs)
-
-class AsyncObserveWrapper:
-    """Async wrapper for Galileo ObserveWorkflows"""
-    
-    def __init__(self, observe_logger: ObserveWorkflows):
-        self._observe_logger = observe_logger
-        self._logger = QueuedLogger()
-
-    async def add_agent_workflow(self, **kwargs):
-        """Create a new workflow and initialize it"""
-        # Create workflow first
-        workflow = self._observe_logger.add_agent_workflow(**kwargs)
-        wrapped = AsyncWorkflowWrapper(workflow)
-        
-        # Set it as current workflow before logging anything
-        self._logger.set_workflow(wrapped)
-        
-        # Now we can safely log events
-        metadata = kwargs.get('metadata', {})
-        await self._logger.queue_event(LogEvent(
-            event_type='llm',
-            name='umbrella_agent',
-            input=kwargs['input'],
-            output="",
-            metadata=metadata
-        ))
-        
-        return wrapped
-
-    async def upload_workflows(self):
-        """Actually upload the workflows"""
-        # Process any remaining events before uploading
-        await self._logger._process_events()
-        # Then upload
-        self._observe_logger.upload_workflows()
-
-class GalileoToolHooks:
-    def __init__(self, logger: 'GalileoAgentLogger'):
-        self.logger = logger
-        self._logger = QueuedLogger()
-
-    @property
-    def workflow(self) -> AgentStep:
-        return self.logger.workflow
-
-    async def before_execution(self, context: ToolContext) -> None:
-        """Log before tool execution"""
-        self.logger.info(
-            f"Executing tool: {context.tool_name}",
-            inputs=context.inputs,
-            task_id=context.task_id
-        )
-
-    async def after_execution(
-        self,
-        context: ToolContext,
-        result: Any,
-        error: Optional[Exception] = None
-    ) -> None:
-        """Log after tool execution"""
-        if error:
-            self.logger.error(
-                f"Tool execution failed: {context.tool_name}",
-                error=str(error),
-                task_id=context.task_id
-            )
-        else:
-            self.logger.info(
-                f"Tool execution completed: {context.tool_name}",
-                result=result,
-                task_id=context.task_id
-            )
-            await self._logger.queue_event(LogEvent(
-                event_type='tool',
-                name=context.tool_name,
-                input=context.inputs,
-                output=result,
-                metadata={"agent_id": context.agent_id, "type": "execution"}
-            ))
-
-class GalileoToolSelectionHooks:
-    def __init__(self, logger: 'GalileoAgentLogger'):
-        self.logger = logger
-        self._logger = QueuedLogger()
-
-    @property
-    def workflow(self) -> AgentStep:
-        return self.logger.workflow
-
-    async def after_selection(
-        self,
-        context: ToolContext,
-        selected_tool: str,
-        confidence: float,
-        reasoning: List[str]
-    ) -> None:
-        """Log tool selection"""
-        await self._logger.queue_event(LogEvent(
-            event_type='llm',
-            name=f"{selected_tool}_selection",
-            input=format_messages(context.message_history) if context.message_history else [],
-            output={
-                "selected_tool": selected_tool,
-                "confidence": confidence,
-                "reasoning": reasoning
-            },
-            tools=context.available_tools,
-            model="gpt-4o",
-            metadata={"agent_id": context.agent_id, "type": "selection"}
-        ))
-
-class GalileoAgentLogger(AgentLogger):
+class GalileoLogger:
+    """Core logging functionality for Galileo"""
     def __init__(self, agent_id: str):
-        super().__init__(agent_id)
-        self.observe_logger = AsyncObserveWrapper(observe_logger)
+        self.agent_id = agent_id
+        self.queue = EventQueue()
         self._workflow = None
-        self._logger = QueuedLogger()
-        print(f"[GalileoAgentLogger] Initialized with agent_id: {agent_id}")
+        print(f"Initialized GalileoLogger with agent_id: {agent_id}")
 
     @property
     def workflow(self) -> AsyncWorkflowWrapper:
-        if self._workflow is None:
-            raise RuntimeError("Workflow not initialized. Must call on_agent_planning first.")
+        if not self._workflow:
+            raise RuntimeError("Workflow not initialized")
         return self._workflow
 
     @workflow.setter
     def workflow(self, value: AsyncWorkflowWrapper):
+        print(f"Setting workflow in GalileoLogger")
         self._workflow = value
-        self._logger.set_workflow(value)
+        self.queue.set_workflow(value)
 
-    async def add_llm_step(self, **kwargs) -> None:
-        """Queue an LLM event"""
-        print(f"[GalileoAgentLogger] Adding LLM step: name={kwargs.get('name')}")
-        await self._logger.queue_event(LogEvent(event_type='llm', **kwargs))
+    async def log_llm(self, name: str, input: Any, output: Any = "", **kwargs):
+        """Log an LLM event"""
+        print(f"Logging LLM event: {name}")
+        metadata = {"agent_id": self.agent_id, **kwargs.get("metadata", {})}
+        await self.queue.add(Event("llm", name, input, output, metadata, 
+                                 kwargs.get("tools"), kwargs.get("model")))
 
-    async def add_tool_step(self, **kwargs) -> None:
-        """Queue a tool event"""
-        print(f"[GalileoAgentLogger] Adding Tool step: name={kwargs.get('name')}")
-        await self._logger.queue_event(LogEvent(event_type='tool', **kwargs))
+    async def log_tool(self, name: str, input: Any, output: Any = "", **kwargs):
+        """Log a tool event"""
+        print(f"Logging tool event: {name}")
+        metadata = {"agent_id": self.agent_id, **kwargs.get("metadata", {})}
+        await self.queue.add(Event("tool", name, input, output, metadata))
 
-    async def add_workflow(
-        self,
-        input: str,
-        name: str,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> AsyncWorkflowWrapper:
-        """Async wrapper for observe_logger.add_agent_workflow"""
-        return await self.observe_logger.add_agent_workflow(
-            input=input,
-            name=name,
-            metadata=metadata or {}
-        )
+class GalileoAgentLogger(AgentLogger):
+    """Main logger interface for the agent"""
+    def __init__(self, agent_id: str):
+        super().__init__(agent_id)
+        print(f"Initializing GalileoAgentLogger with agent_id: {agent_id}")
+        self.logger = GalileoLogger(agent_id)
+        self.observe_logger = ObserveWorkflows(project_name="observe-umbrella-agent")
 
-    def info(self, message: str, **kwargs) -> None:
-        print(f"INFO: {message}") # Don't change this
-
-    def warning(self, message: str, **kwargs) -> None:
-        print(f"WARNING: {message}") # Don't change this
-
-    def error(self, message: str, **kwargs) -> None:
-        print(f"ERROR: {message}") # Don't change this
-
-    def debug(self, message: str, **kwargs) -> None:
-        print(f"DEBUG: {message}") # Don't change this
-
-    def _write_log(self, log_entry: Dict[str, Any]) -> None:
-        # Not needed as we use observe_logger directly
-        pass
-
-    def _sanitize_for_json(self, obj: Any) -> Any:
-        # Not needed as observe_logger handles serialization
-        pass
-
-    def get_logger(self) -> ObserveWorkflows:
-        return self.observe_logger
-
-    def get_tool_hooks(self) -> ToolHooks:
-        """Get tool hooks for this logger"""
-        return GalileoToolHooks(self)
-        
-    def get_tool_selection_hooks(self) -> ToolSelectionHooks:
-        """Get tool selection hooks for this logger"""
-        return GalileoToolSelectionHooks(self)
-    
     async def on_agent_planning(self, planning_prompt: str) -> None:
-        """Log agent planning event"""
-        print("[GalileoAgentLogger] Starting agent planning")
-        # Initialize workflow first
-        workflow = await self.add_workflow(
-            input=planning_prompt,
-            name="umbrella_agent",
-            metadata={"agent_id": self.agent_id}
+        print("Starting agent planning")
+        # Initialize workflow
+        workflow = AsyncWorkflowWrapper(
+            self.observe_logger.add_agent_workflow(
+                input=planning_prompt,
+                name="umbrella_agent",
+                metadata={"agent_id": self.agent_id}
+            )
         )
+        self.logger.workflow = workflow
         
-        print("[GalileoAgentLogger] Setting workflow")
-        self.workflow = workflow
-        
-        print("[GalileoAgentLogger] Adding planning step")
-        await self.add_llm_step(
+        # Log planning step
+        print("Adding planning step")
+        await self.logger.log_llm(
             name="agent_planning",
             input=planning_prompt,
-            output="",
-            metadata={"agent_id": self.agent_id, "type": "planning"}
+            metadata={"type": "planning"}
         )
-
-    def on_agent_start(self, initial_task: str) -> None:
-        """Log the agent execution prompt"""
-        print(f"Initial task: {initial_task}")
+        print("Planning step completed")
 
     async def on_agent_done(self, result: Any, message_history: Optional[List[Any]] = None) -> None:
-        """Log agent completion event"""
-        print("[GalileoAgentLogger] Starting agent completion")
-        # First add the final result
-        await self.add_llm_step(
+        print("Starting agent completion")
+        # Log final result
+        await self.logger.log_llm(
             name="final_result",
-            input=ensure_valid_io(format_messages(message_history) if message_history else []),
-            output=ensure_valid_io(result),
-            model="gpt-4o",
-            metadata={"agent_id": self.agent_id, "type": "final_result"}
+            input=message_history or [],
+            output=result,
+            metadata={"type": "final_result"}
         )
         
-        print("[GalileoAgentLogger] Processing remaining events")
-        await self._logger._process_events()
-        
-        print("[GalileoAgentLogger] Concluding workflow")
-        await self.workflow.conclude(output={"result": result})
-        
-        print("[GalileoAgentLogger] Uploading workflows")
-        await self.observe_logger.upload_workflows()
-        print("[GalileoAgentLogger] Agent completion finished")
+        # Conclude and upload
+        print("Concluding workflow")
+        await self.logger.workflow.conclude(output={"result": result})
+        print("Uploading workflows")
+        self.observe_logger.upload_workflows()
+        print("Agent completion finished")
 
-    async def on_tool_selection(self, tool_name: str, tool_input: Any) -> None:
-        """Log tool selection event"""
-        await self.add_tool_step(
-            name=tool_name,
-            input=tool_input,
-            output="",
-            metadata={"agent_id": self.agent_id, "type": "selection"}
-        )
+    def get_tool_hooks(self) -> ToolHooks:
+        """Create tool execution hooks"""
+        logger = self.logger
+        
+        class Hooks(ToolHooks):
+            async def before_execution(self, context: ToolContext) -> None:
+                """Required by ToolHooks but we don't need to log anything here"""
+                print(f"INFO: Executing tool: {context.tool_name}")
 
-    async def on_tool_execution(self, tool_name: str, tool_input: Any, tool_output: Any) -> None:
-        """Log tool execution event"""
-        await self.add_tool_step(
-            name=tool_name,
-            input=tool_input,
-            output=tool_output,
-            metadata={"agent_id": self.agent_id, "type": "execution"}
-        )
+            async def after_execution(self, context: ToolContext, result: Any, 
+                                   error: Optional[Exception] = None) -> None:
+                if not error:
+                    print(f"INFO: Tool execution completed: {context.tool_name}")
+                    await logger.log_tool(
+                        name=context.tool_name,
+                        input=context.inputs,
+                        output=result,
+                        metadata={"type": "execution"}
+                    )
+                else:
+                    print(f"ERROR: Tool execution failed: {context.tool_name} - {error}")
+        
+        return Hooks()
+
+    def get_tool_selection_hooks(self) -> ToolSelectionHooks:
+        """Create tool selection hooks"""
+        logger = self.logger
+        
+        class Hooks(ToolSelectionHooks):
+            async def after_selection(self, context: ToolContext, selected_tool: str,
+                                   confidence: float, reasoning: List[str]) -> None:
+                await logger.log_llm(
+                    name=f"{selected_tool}_selection",
+                    input=context.message_history or [],
+                    output={
+                        "selected_tool": selected_tool,
+                        "confidence": confidence,
+                        "reasoning": reasoning
+                    },
+                    tools=context.available_tools,
+                    metadata={"type": "selection"}
+                )
+        
+        return Hooks()
+
+    # Required but unused methods
+    def info(self, message: str, **kwargs): print(f"INFO: {message}")
+    def warning(self, message: str, **kwargs): print(f"WARNING: {message}")
+    def error(self, message: str, **kwargs): print(f"ERROR: {message}")
+    def debug(self, message: str, **kwargs): print(f"DEBUG: {message}")
+    def on_agent_start(self, initial_task: str): print(f"Initial task: {initial_task}")
+    def _write_log(self, log_entry: Dict[str, Any]): pass
+    def _sanitize_for_json(self, obj: Any): pass
