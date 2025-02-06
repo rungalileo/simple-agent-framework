@@ -50,14 +50,13 @@ class Agent(ABC):
         self.message_history: List[Dict[str, Any]] = []
         self.logger = logger
 
-    def _setup_logger(self) -> None:
+    def _setup_logger(self, logger: AgentLogger) -> None:
         """Create and set up the logger after tools are registered"""
-        logger = GalileoLogger(agent_id="umbrella_agent")
-        self.config.logger = logger  # Set in config
         
         # Set hooks for all registered tools
         for tool in self.tool_registry.list_tools():
             tool.hooks = logger.get_tool_hooks()
+            print(f"Set hooks for tool {tool.name}: {tool.hooks}")
         
         # Set tool selection hooks
         self.tool_selection_hooks = logger.get_tool_selection_hooks()
@@ -226,7 +225,7 @@ class Agent(ABC):
             
             # Log the planning response
             if self.logger:
-                self.logger.on_agent_planning(plan.input_analysis)
+                await self.logger.on_agent_planning(plan.input_analysis)
             
             if self.config.verbosity == VerbosityLevel.HIGH:
                 display_analysis(plan.input_analysis)
@@ -255,37 +254,33 @@ class Agent(ABC):
             start_time=datetime.now(),
             steps=[]
         )
-        
+
+        if self.logger:
+            self.logger.on_agent_start(task)
+
         try:
             # Create a plan using chain of thought reasoning
-            plan: TaskAnalysis = await self.plan_task(task)
+            plan = await self.plan_task(task)
             
             # Execute each step in the plan
             results = []
             for step in plan.execution_plan:
                 result = await self._execute_step(step, task, plan)
-                
-                if self.config.verbosity == VerbosityLevel.HIGH:
-                    display_tool_result(step["tool"], result)
-                
                 results.append((step["tool"], result))
             
-            # Format final result only after all tools have completed
+            # Format final result
             result = await self._format_result(task, results)
             self.current_task.output = result
             
-            if self.config.verbosity == VerbosityLevel.HIGH:
-                display_final_result(result)
+            # Only call on_agent_done after all tools have completed
+            if self.logger:
+                await self.logger.on_agent_done(result, self.message_history)
             
             return result
             
         except Exception as e:
             self.current_task.error = str(e)
             self.current_task.status = "failed"
-            
-            if self.config.verbosity == VerbosityLevel.HIGH:
-                display_error(str(e))
-            
             raise
         finally:
             self.current_task.end_time = datetime.now()

@@ -31,6 +31,8 @@ class AgentLogger(ABC):
     
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
+        self._tool_hooks = None
+        self._tool_selection_hooks = None
 
     @abstractmethod
     def info(self, message: str, **kwargs) -> None:
@@ -63,7 +65,7 @@ class AgentLogger(ABC):
         pass
 
     @abstractmethod
-    def on_agent_planning(self, planning_prompt: str) -> None:
+    async def on_agent_planning(self, planning_prompt: str) -> None:
         """Log the agent planning prompt"""
         pass
 
@@ -73,14 +75,17 @@ class AgentLogger(ABC):
         pass
 
     @abstractmethod
-    def get_tool_hooks(self) -> ToolHooks:
-        """Get tool hooks for this logger"""
+    async def on_agent_done(self, result: str, message_history: List[Dict[str, Any]]) -> None:
+        """Log the agent completion"""
         pass
 
-    @abstractmethod
+    def get_tool_hooks(self) -> ToolHooks:
+        """Get tool hooks for this logger"""
+        return self._tool_hooks
+
     def get_tool_selection_hooks(self) -> ToolSelectionHooks:
         """Get tool selection hooks for this logger"""
-        pass
+        return self._tool_selection_hooks
     
 class ConsoleAgentLogger(AgentLogger):
     """Console implementation of agent logger"""
@@ -121,3 +126,12 @@ class ConsoleAgentLogger(AgentLogger):
             return {str(k): self._sanitize_for_json(v) for k, v in obj.items()}
         else:
             return str(obj)
+
+    async def on_agent_planning(self, planning_prompt: str) -> None:
+        self.info(f"Planning: {planning_prompt}")
+
+    def on_agent_start(self, initial_task: str) -> None:
+        self.info(f"Starting task: {initial_task}")
+
+    async def on_agent_done(self, result: str, message_history: List[Dict[str, Any]]) -> None:
+        self.info(f"Task completed: {result}")
