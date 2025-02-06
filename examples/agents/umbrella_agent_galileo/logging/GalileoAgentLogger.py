@@ -257,15 +257,6 @@ class GalileoAgentLogger(AgentLogger):
             )
         )
         self.logger.workflow = workflow
-        
-        # Log planning step
-        print("Adding planning step")
-        await self.logger.log_llm(
-            name="agent_planning",
-            input=planning_prompt,
-            metadata={"type": "planning"}
-        )
-        print("Planning step completed")
 
     async def on_agent_done(self, result: Any, message_history: Optional[List[Any]] = None) -> None:
         print("Starting agent completion")
@@ -315,9 +306,29 @@ class GalileoAgentLogger(AgentLogger):
         class Hooks(ToolSelectionHooks):
             async def after_selection(self, context: ToolContext, selected_tool: str,
                                    confidence: float, reasoning: List[str]) -> None:
+                # Always include complete context in the input
+                input_data = {
+                    "task": context.task,
+                    "message_history": context.message_history or [],
+                    "available_tools": context.available_tools,
+                    "previous_tools": context.previous_tools,
+                    "previous_results": context.previous_results
+                }
+                
+                # Include plan if available
+                if context.plan:
+                    input_data["plan"] = {
+                        "input_analysis": context.plan.input_analysis,
+                        "available_tools": context.plan.available_tools,
+                        "tool_capabilities": context.plan.tool_capabilities,
+                        "execution_plan": context.plan.execution_plan,
+                        "requirements_coverage": context.plan.requirements_coverage,
+                        "chain_of_thought": context.plan.chain_of_thought
+                    }
+
                 await logger.log_llm(
                     name=f"{selected_tool}_selection",
-                    input=context.message_history or [],
+                    input=input_data,
                     output={
                         "selected_tool": selected_tool,
                         "confidence": confidence,

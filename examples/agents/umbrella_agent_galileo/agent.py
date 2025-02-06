@@ -91,31 +91,6 @@ class UmbrellaAgent(Agent):
         print(f"Setting up logger for {self.logger}")
         self._setup_logger(logger=self.logger)
 
-    # def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
-    #     """Create a custom planning prompt for the umbrella agent"""
-    #     tools_description = "\n".join([
-    #         f"Tool: {tool.name}\n"
-    #         f"Description: {tool.description}\n"
-    #         f"Tags: {', '.join(tool.tags)}\n"
-    #         f"Input Schema: {tool.input_schema}\n"
-    #         f"Output Schema: {tool.output_schema}\n"
-    #         for tool in self.tool_registry.list_tools()
-    #     ])
-        
-    #     # Use agent-specific template
-    #     template = self.template_env.get_template("planning.j2")
-    #     system_prompt = template.render(
-    #         tools_description=tools_description
-    #     )
-        
-    #     return [
-    #         LLMMessage(role="system", content=system_prompt),
-    #         LLMMessage(
-    #             role="user",
-    #             content=f"Location: {task}\n\nAnalyze this location and create a complete weather analysis plan with ALL required fields."
-    #         )
-    #     ]
-
     async def _format_result(self, task: str, results: List[tuple[str, Dict[str, Any]]]) -> str:
         """Format the final result from tool executions"""
         weather_data = self.state.get_tool_result("weather_retriever")

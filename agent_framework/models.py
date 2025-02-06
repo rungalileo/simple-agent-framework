@@ -20,21 +20,59 @@ class VerbosityLevel(str, Enum):
     LOW = "low"     # Show major steps and results
     HIGH = "high"   # Show detailed execution steps, tool selection, and reasoning
 
+class TaskAnalysis(BaseModel):
+    """Analysis of a task using chain of thought reasoning"""
+    input_analysis: str = Field(
+        description="Analysis of the input, identifying key requirements and constraints"
+    )
+    available_tools: List[str] = Field(
+        description="List of tools available for the task"
+    )
+    tool_capabilities: Dict[str, List[str]] = Field(
+        description="Mapping of tools to their key capabilities"
+    )
+    execution_plan: List[Dict[str, Any]] = Field(
+        description="Ordered list of steps to execute, each with tool and reasoning"
+    )
+    requirements_coverage: Dict[str, List[str]] = Field(
+        description="How the identified requirements are covered by the planned steps"
+    )
+    chain_of_thought: List[str] = Field(
+        description="Chain of thought reasoning that led to this plan"
+    )
+
 @dataclass
 class ToolContext:
-    """Context passed to tool hooks containing execution history and metadata"""
-    task: str = field(metadata={"description": "The current task being executed"})
-    tool_name: str = field(metadata={"description": "Name of the tool being executed"})
-    inputs: Dict[str, Any] = field(metadata={"description": "Input parameters for the tool"})
-    previous_tools: List[str] = field(metadata={"description": "List of tools that were previously executed in this task"})
-    previous_results: List[Dict[str, Any]] = field(metadata={"description": "Results from previous tool executions"})
-    previous_errors: List[str] = field(metadata={"description": "Errors from previous tool executions"})
-    message_history: List[Dict[str, Any]] = field(metadata={"description": "Complete history of messages and tool executions"})
-    agent_id: str = field(metadata={"description": "ID of the agent executing the tool"})
-    task_id: str = field(metadata={"description": "ID of the current task"})
-    start_time: datetime = field(metadata={"description": "When the task started"})
-    available_tools: List[Dict[str, Any]] = field(metadata={"description": "List of tools available for the task"})
-    metadata: Dict[str, Any] = field(metadata={"description": "Additional metadata from agent configuration"})
+    """Context object passed to tool hooks"""
+    def __init__(
+        self,
+        task: str,
+        tool_name: str,
+        inputs: Dict[str, Any],
+        available_tools: List[Dict[str, Any]],
+        previous_tools: List[str],
+        previous_results: List[Any],
+        previous_errors: List[Any],
+        message_history: List[Dict[str, Any]],
+        agent_id: str,
+        task_id: str,
+        start_time: datetime,
+        metadata: Dict[str, Any],
+        plan: Optional[TaskAnalysis] = None
+    ):
+        self.task = task
+        self.tool_name = tool_name
+        self.inputs = inputs
+        self.available_tools = available_tools
+        self.previous_tools = previous_tools
+        self.previous_results = previous_results
+        self.previous_errors = previous_errors
+        self.message_history = message_history
+        self.agent_id = agent_id
+        self.task_id = task_id
+        self.start_time = start_time
+        self.metadata = metadata
+        self.plan = plan  # The agent's planning analysis
 
 @dataclass
 class Tool:
@@ -114,27 +152,6 @@ class ToolCall(BaseModel):
     error: Optional[str] = Field(
         default=None,
         description="Error message if the tool execution failed"
-    )
-
-class TaskAnalysis(BaseModel):
-    """Analysis of a task using chain of thought reasoning"""
-    input_analysis: str = Field(
-        description="Analysis of the input, identifying key requirements and constraints"
-    )
-    available_tools: List[str] = Field(
-        description="List of tools available for the task"
-    )
-    tool_capabilities: Dict[str, List[str]] = Field(
-        description="Mapping of tools to their key capabilities"
-    )
-    execution_plan: List[Dict[str, Any]] = Field(
-        description="Ordered list of steps to execute, each with tool and reasoning"
-    )
-    requirements_coverage: Dict[str, List[str]] = Field(
-        description="How the identified requirements are covered by the planned steps"
-    )
-    chain_of_thought: List[str] = Field(
-        description="Chain of thought reasoning that led to this plan"
     )
 
 class ExecutionStep(BaseModel):

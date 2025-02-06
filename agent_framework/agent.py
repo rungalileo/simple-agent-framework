@@ -49,6 +49,7 @@ class Agent(ABC):
         self.state: Dict[str, Any] = {}
         self.message_history: List[Dict[str, Any]] = []
         self.logger = logger
+        self._current_plan: Optional[TaskAnalysis] = None
 
     def _setup_logger(self, logger: AgentLogger) -> None:
         """Create and set up the logger after tools are registered"""
@@ -83,7 +84,8 @@ class Agent(ABC):
             agent_id=self.agent_id,
             task_id=self.current_task.task_id,
             start_time=self.current_task.start_time,
-            metadata=self.config.metadata
+            metadata=self.config.metadata,
+            plan=self._current_plan  # Pass the current plan in the context
         )
 
     async def call_tool(
@@ -260,12 +262,12 @@ class Agent(ABC):
 
         try:
             # Create a plan using chain of thought reasoning
-            plan = await self.plan_task(task)
+            self._current_plan = await self.plan_task(task)
             
             # Execute each step in the plan
             results = []
-            for step in plan.execution_plan:
-                result = await self._execute_step(step, task, plan)
+            for step in self._current_plan.execution_plan:
+                result = await self._execute_step(step, task, self._current_plan)
                 results.append((step["tool"], result))
             
             # Format final result
@@ -286,6 +288,7 @@ class Agent(ABC):
             self.current_task.end_time = datetime.now()
             if self.current_task.status == "in_progress":
                 self.current_task.status = "completed"
+            self._current_plan = None  # Clear the plan
 
     async def _execute_step(self, step: Dict[str, Any], task: str, plan: TaskAnalysis) -> Any:
         """Execute a single step in the plan"""
