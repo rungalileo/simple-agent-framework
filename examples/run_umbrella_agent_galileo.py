@@ -12,7 +12,7 @@ async def main():
     
     # Override specific settings
     config = config.with_overrides(
-        verbosity=VerbosityLevel.LOW,
+        verbosity=VerbosityLevel.HIGH,
         enable_logging=False,
         metadata={"location": "Houston, TX"}
     )

@@ -1,27 +1,22 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Callable, Awaitable
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 from datetime import datetime
-import json
 from .utils.logging import AgentLogger
 from .utils.tool_registry import ToolRegistry
-from rich.panel import Panel
-from rich.json import JSON
-from rich.console import Console
 
 from .models import (
-    AgentMetadata, TaskExecution, ExecutionStep, ToolCall,
-    Tool, VerbosityLevel, TaskAnalysis, ToolContext, ToolHooks,
+    TaskExecution, VerbosityLevel, TaskAnalysis, ToolContext,
     ToolSelectionHooks, AgentConfig
 )
 from .llm.base import LLMProvider
-from .llm.models import LLMMessage, LLMConfig
-from .llm.openai_provider import OpenAIProvider
+from .llm.models import LLMMessage
+
 from .utils.formatting import (
     display_task_header, display_analysis, display_chain_of_thought,
-    display_execution_plan, display_tool_result, display_final_result,
-    display_error
+    display_execution_plan, display_error
 )
+
 from .exceptions import ToolNotFoundError, ToolExecutionError
 
 class Agent(ABC):
@@ -56,9 +51,7 @@ class Agent(ABC):
         
         # Set hooks for all registered tools
         for tool in self.tool_registry.list_tools():
-            tool.hooks = logger.get_tool_hooks()
-            print(f"Set hooks for tool {tool.name}: {tool.hooks}")
-        
+            tool.hooks = logger.get_tool_hooks()        
         # Set tool selection hooks
         self.tool_selection_hooks = logger.get_tool_selection_hooks()
 

@@ -1,14 +1,10 @@
 from typing import Any, Dict, List
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
-from uuid import uuid4
-from datetime import datetime
 
 from agent_framework.agent import Agent
-from agent_framework.models import TaskAnalysis, TaskExecution
 from agent_framework.llm.models import LLMMessage
 from agent_framework.state import AgentState
-from agent_framework.exceptions import ToolNotFoundError
 from typing import Sequence, Union
 
 from .tools.weather_retriever import WeatherRetrieverTool
@@ -67,11 +63,8 @@ class UmbrellaAgent(Agent):
             lstrip_blocks=True
         )
         
-        # Create logger first
+        # Initialize logger and register tools
         self.logger = GalileoAgentLogger(agent_id=self.agent_id)
-        print(f"Logger created: {self.logger}")
-        
-        # Then register tools and set up hooks
         self._register_tools()
 
     def _register_tools(self) -> None:
@@ -88,7 +81,6 @@ class UmbrellaAgent(Agent):
             implementation=UmbrellaDeciderTool
         )
         
-        print(f"Setting up logger for {self.logger}")
         self._setup_logger(logger=self.logger)
 
     async def _format_result(self, task: str, results: List[tuple[str, Dict[str, Any]]]) -> str:
