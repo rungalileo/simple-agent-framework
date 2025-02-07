@@ -10,49 +10,21 @@ class EnvironmentError(Exception):
     """Raised when required environment variables are missing"""
     pass
 
-@lru_cache()
-def load_config():
-    """Load configuration from environment variables"""
-    load_dotenv()
-    
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise EnvironmentError(
-            "OPENAI_API_KEY environment variable is required. "
-            "Please set it in your .env file"
-        )
-    
-    weather_api_key = os.getenv("WEATHER_API_KEY")
-    if not weather_api_key:
-        raise EnvironmentError(
-            "WEATHER_API_KEY environment variable is required. "
-            "Please set it in your .env file"
-        )
-    
-    return {
-        "openai_api_key": openai_api_key,
-        "openai_org": os.getenv("OPENAI_ORGANIZATION"),  # Optional
-        "weather_api_key": weather_api_key
-    } 
-
 @dataclass
 class AgentConfiguration:
-    """Central configuration for agent framework"""
-    
-    # LLM Configuration
-    llm_config: LLMConfig
-    
-    # API Keys and External Services
+    """Configuration for the agent framework"""
+    llm_config: LLMConfig = field(default_factory=lambda: LLMConfig(model="gpt-4", temperature=0.1))
     api_keys: Dict[str, str] = field(default_factory=dict)
-    
-    # Agent Settings
-    verbosity: VerbosityLevel = VerbosityLevel.LOW
+    verbosity: VerbosityLevel = field(default=VerbosityLevel.LOW)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    # Optional Features
-    enable_logging: bool = True
-    enable_tool_selection: bool = True
-    
+    enable_logging: bool = field(default=True)
+    enable_tool_selection: bool = field(default=True)
+
+    @staticmethod
+    def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
+        """Get an environment variable with an optional default"""
+        return os.getenv(key, default)
+
     @classmethod
     def from_env(cls, required_keys: List[str], optional_keys: Optional[Dict[str, str]] = None) -> "AgentConfiguration":
         """Create configuration from environment variables
