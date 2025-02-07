@@ -18,8 +18,7 @@ class AgentFactory:
         if not self._llm_provider:
             if "openai" in self.config.api_keys:
                 self._llm_provider = OpenAIProvider(
-                    config=self.config.llm_config,
-                    api_key=self.config.api_keys["openai"]
+                    config=self.config.llm_config
                 )
             else:
                 raise ValueError("No LLM provider configured")

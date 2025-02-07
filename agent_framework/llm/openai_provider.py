@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional, AsyncGenerator, Type, TypeVar
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+import os
+from dotenv import load_dotenv
 
 from .base import LLMProvider
 from .models import LLMMessage, LLMResponse, LLMConfig
@@ -13,13 +15,20 @@ class OpenAIProvider(LLMProvider):
     def __init__(
         self,
         config: LLMConfig,
-        api_key: str,
         organization: Optional[str] = None
     ):
         super().__init__(config)
+        
+        # Load environment variables
+        load_dotenv()
+        
+        # Use provided API key or load from environment
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OpenAI API key must be provided or set in OPENAI_API_KEY environment variable")
+            
         self.client = AsyncOpenAI(
-            api_key=api_key,
-            organization=organization
+            api_key=self.api_key
         )
 
     def _prepare_messages(

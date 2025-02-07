@@ -1,64 +1,64 @@
-from typing import Any, Dict
-from agent_framework.models import Tool
-from agent_framework.llm.models import LLMMessage, LLMConfig
-from agent_framework.llm.tool_models import KeywordExtraction
+from typing import Dict, Any, List
+from agent_framework.tools.base import BaseTool
+from agent_framework.models import ToolMetadata
 
-class KeywordExtractorTool:
-    """Keyword extraction tool implementation"""
-    
-    @staticmethod
-    def get_tool_definition() -> Tool:
-        return Tool(
+class KeywordExtractorTool(BaseTool):
+    """Tool for extracting keywords from text"""
+
+    @classmethod
+    def get_metadata(cls) -> ToolMetadata:
+        """Get tool metadata"""
+        return ToolMetadata(
             name="keyword_extractor",
-            description="Extracts and categorizes keywords with importance scoring",
-            input_schema={"text": "string"},
-            output_schema=KeywordExtraction.model_json_schema(),
-            tags=["text", "keywords", "extraction", "categorization"]
+            description="Extracts important keywords and phrases from text",
+            tags=["text", "keywords", "extraction"],
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text to extract keywords from"
+                    }
+                },
+                "required": ["text"]
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "importance_scores": {
+                        "type": "object",
+                        "additionalProperties": {"type": "number"}
+                    }
+                }
+            }
         )
 
-    @staticmethod
-    async def execute(text: str, llm_config: LLMConfig, llm_provider: Any) -> Dict[str, Any]:
-        """Execute the keyword extraction"""
-        messages = [
-            LLMMessage(
-                role="system",
-                content=(
-                    "You are an advanced keyword extraction system. Extract relevant keywords "
-                    "from the provided text, score their importance, and categorize them. "
-                    "Consider the context and domain of the text in your analysis."
-                    "\n\nYour output must include:\n"
-                    "1. A list of keywords\n"
-                    "2. Importance scores (0-1) for each keyword\n"
-                    "3. Categories with their associated keywords\n"
-                    "4. Overall extraction confidence (0-1)\n"
-                    "5. Context relevance description\n\n"
-                    "Your response must exactly match this JSON structure:\n"
-                    "{\n"
-                    '  "keywords": ["keyword1", "keyword2", "keyword3"],\n'
-                    '  "importance_scores": {\n'
-                    '    "keyword1": 0.9,\n'
-                    '    "keyword2": 0.8,\n'
-                    '    "keyword3": 0.7\n'
-                    '  },\n'
-                    '  "categories": {\n'
-                    '    "category1": ["keyword1", "keyword2"],\n'
-                    '    "category2": ["keyword3"]\n'
-                    '  },\n'
-                    '  "extraction_confidence": 0.85,\n'
-                    '  "context_relevance": "Description of relevance to context"\n'
-                    "}"
-                )
-            ),
-            LLMMessage(
-                role="user",
-                content=f"Extract keywords from this text:\n\n{text}"
-            )
-        ]
+    async def execute(self, text: str) -> Dict[str, Any]:
+        """Extract keywords from text"""
+        # Simple implementation - in real world would use NLP
+        words = text.lower().split()
+        word_freq = {}
         
-        extraction = await llm_provider.generate_structured(
-            messages,
-            KeywordExtraction,
-            llm_config
-        )
+        # Count word frequencies
+        for word in words:
+            if len(word) > 3:  # Only consider words longer than 3 chars
+                word_freq[word] = word_freq.get(word, 0) + 1
+                
+        # Get top keywords by frequency
+        keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:5]
         
-        return extraction.model_dump() 
+        # Calculate importance scores (normalized frequencies)
+        max_freq = max(freq for _, freq in keywords) if keywords else 1
+        importance_scores = {
+            word: freq / max_freq 
+            for word, freq in keywords
+        }
+            
+        return {
+            "keywords": [word for word, _ in keywords],
+            "importance_scores": importance_scores
+        } 

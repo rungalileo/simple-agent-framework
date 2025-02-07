@@ -298,8 +298,8 @@ class Agent(ABC):
         tool_context = self._create_tool_context(tool_name, inputs)
         
         # Log tool selection first
-        if self.logger:
-            await self.logger.get_tool_selection_hooks().after_selection(
+        if self.logger and (hooks := self.logger.get_tool_selection_hooks()):
+            await hooks.after_selection(
                 tool_context,
                 tool_name,
                 1.0,
