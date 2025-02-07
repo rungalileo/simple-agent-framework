@@ -1,6 +1,6 @@
 from typing import List
 from pydantic import BaseModel, Field
-from agent_framework.schemas import ToolMetadata
+from agent_framework.models import ToolMetadata
 
 class WeatherRetrieverInput(BaseModel):
     """Input schema for weather retriever tool"""

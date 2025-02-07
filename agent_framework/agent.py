@@ -14,7 +14,7 @@ from .llm.models import LLMMessage
 
 from .utils.formatting import (
     display_task_header, display_analysis, display_chain_of_thought,
-    display_execution_plan, display_error
+    display_execution_plan, display_error, display_final_result
 )
 
 from .exceptions import ToolNotFoundError, ToolExecutionError
@@ -271,6 +271,8 @@ class Agent(ABC):
             if self.logger:
                 await self.logger.on_agent_done(result, self.message_history)
             
+            if self.config.verbosity == VerbosityLevel.HIGH:
+                display_final_result(result)
             return result
             
         except Exception as e:

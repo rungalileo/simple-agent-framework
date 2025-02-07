@@ -1,18 +1,32 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 from dataclasses import dataclass, field
 from .utils.hooks import ToolHooks, ToolSelectionHooks
 from .utils.logging import AgentLogger
 
+class ToolMetadata(BaseModel):
+    """Base schema for tool metadata"""
+    name: str = Field(description="Unique identifier for the tool")
+    description: str = Field(description="Human-readable description of what the tool does")
+    tags: List[str] = Field(description="Categories/capabilities of the tool")
+    input_schema: Dict[str, Any] = Field(description="JSON schema for tool inputs")
+    output_schema: Dict[str, Any] = Field(description="JSON schema for tool outputs")
+    examples: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Example uses of the tool"
+    )
+
 class AgentMetadata(BaseModel):
-    """Metadata associated with an agent"""
+    """Base schema for agent metadata"""
     name: str = Field(description="Name of the agent")
-    description: Optional[str] = Field(None, description="Description of the agent's purpose and capabilities")
-    version: str = Field("1.0.0", description="Version of the agent")
-    capabilities: List[str] = Field(default_factory=list, description="List of capabilities this agent has")
+    description: str = Field(description="What the agent does")
+    capabilities: List[str] = Field(description="High-level capabilities")
+    tools: List[ToolMetadata] = Field(description="Tools available to this agent")
+    version: str = Field(default="1.0.0", description="Version of the agent")
     custom_attributes: Dict[str, Any] = Field(default_factory=dict, description="Additional custom metadata for the agent")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class VerbosityLevel(str, Enum):
     """Controls how much information is displayed to the user"""
@@ -153,7 +167,6 @@ class ToolCall(BaseModel):
         default=None,
         description="Error message if the tool execution failed"
     )
-
 class ExecutionStep(BaseModel):
     """Record of a single step in the agent's execution"""
     step_type: str = Field(
@@ -174,7 +187,6 @@ class ExecutionStep(BaseModel):
         default=None,
         description="State or context information captured during this step"
     )
-
 class TaskExecution(BaseModel):
     """Complete record of a task execution"""
     task_id: str = Field(

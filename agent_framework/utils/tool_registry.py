@@ -1,8 +1,7 @@
 from typing import Dict, List, Optional, Type, Any
 from dataclasses import dataclass, field
-from ..models import Tool
+from ..models import Tool, ToolMetadata
 from ..tools.base import BaseTool
-from ..schemas import ToolMetadata
 
 @dataclass
 class ToolRegistry:

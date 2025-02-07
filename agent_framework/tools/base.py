@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, ClassVar, Type
-from ..schemas import ToolMetadata
+from ..models import ToolMetadata
 
 class BaseTool(ABC):
     """Base class for all tools"""
