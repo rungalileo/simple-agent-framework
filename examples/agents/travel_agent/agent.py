@@ -1,5 +1,7 @@
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
 from agent_framework.agent import Agent
 from agent_framework.models import AgentMetadata, TaskAnalysis
 from agent_framework.state import AgentState
@@ -13,6 +15,15 @@ class TravelAgent(Agent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = AgentState()
+        
+        # Set up template environment
+        template_dir = Path(__file__).parent / "templates"
+        self.template_env = Environment(
+            loader=FileSystemLoader(template_dir),
+            trim_blocks=True,
+            lstrip_blocks=True
+        )
+        
         self._register_tools()
 
     def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
@@ -26,54 +37,20 @@ class TravelAgent(Agent):
             for tool in self.tool_registry.get_all_tools().values()
         ])
 
-        system_prompt = (
-            "You are an intelligent travel planning system that helps users find weather-appropriate events "
-            "and thematically matching restaurants in their chosen city.\n\n"
-            "You MUST follow this exact sequence:\n"
-            "1. First, use event_finder to discover events in the target city\n"
-            "2. Then, use weather_retriever to check weather conditions\n"
-            "3. Finally, use restaurant_recommender to find dining options\n\n"
-            "You MUST provide a complete response with ALL of the following components:\n\n"
-            "1. input_analysis: Analyze the target city (e.g., 'Houston, TX') and any preferences\n"
-            "2. available_tools: List the tools: event_finder, weather_retriever, restaurant_recommender\n"
-            "3. tool_capabilities: Map each tool to its capabilities\n"
-            "4. execution_plan: MUST be exactly 3 steps in this order:\n"
-            "   - First step: Use event_finder with the city name\n"
-            "   - Second step: Use weather_retriever with the same city name\n"
-            "   - Third step: Use restaurant_recommender with the same city name\n"
-            "5. requirements_coverage: How each tool contributes to the experience\n"
-            "6. chain_of_thought: Your step-by-step reasoning\n\n"
-            f"Available Tools:\n{tools_description}\n\n"
-            "Your response MUST be a JSON object with this EXACT structure:\n"
-            "{\n"
-            '  "input_analysis": "Analysis of the target city",\n'
-            '  "available_tools": ["event_finder", "weather_retriever", "restaurant_recommender"],\n'
-            '  "tool_capabilities": {\n'
-            '    "event_finder": ["discover local events", "filter by date and location"],\n'
-            '    "weather_retriever": ["get weather forecasts"],\n'
-            '    "restaurant_recommender": ["find matching restaurants"]\n'
-            "  },\n"
-            '  "execution_plan": [\n'
-            '    {"tool": "event_finder", "reasoning": "Find events", "input_mapping": {"location": "Houston, TX"}},\n'
-            '    {"tool": "weather_retriever", "reasoning": "Check weather", "input_mapping": {"location": "Houston, TX"}},\n'
-            '    {"tool": "restaurant_recommender", "reasoning": "Find restaurants", "input_mapping": {"location": "Houston, TX"}}\n'
-            "  ],\n"
-            '  "requirements_coverage": {\n'
-            '    "events": ["event_finder"],\n'
-            '    "weather": ["weather_retriever"],\n'
-            '    "dining": ["restaurant_recommender"]\n'
-            "  },\n"
-            '  "chain_of_thought": [\n'
-            '    "First find events in the city",\n'
-            '    "Then check weather conditions",\n'
-            '    "Finally find matching restaurants"\n'
-            "  ]\n"
-            "}\n\n"
-            "Ensure ALL fields are present and properly formatted. Missing fields will cause errors."
-        )
-
+        # Get the planning template
+        template = self.template_env.get_template("planning.j2")
+        
+        # Create context with tools description and task
+        context = {
+            "tools_description": tools_description,
+            "task": task
+        }
+        
+        # Render the template
+        system_content = template.render(**context)
+        
         return [
-            LLMMessage(role="system", content=system_prompt),
+            LLMMessage(role="system", content=system_content),
             LLMMessage(
                 role="user", 
                 content=f"Plan a travel itinerary for {task} with events, weather-appropriate activities, and restaurant recommendations."
