@@ -3,18 +3,19 @@ import os
 from typing import Dict, Any, List
 from dotenv import load_dotenv
 from agent_framework.tools.base import BaseTool
+from agent_framework.models import ToolMetadata
 
 class WeatherRetrieverTool(BaseTool):
     """Tool for retrieving weather data"""
 
     @classmethod
-    def get_metadata(cls) -> Dict[str, Any]:
+    def get_metadata(cls) -> ToolMetadata:
         """Get tool metadata"""
-        return {
-            "name": "weather_retriever",
-            "description": "Retrieves current weather data for a given location",
-            "tags": ["weather", "location"],
-            "input_schema": {
+        return ToolMetadata(
+            name="weather_retriever",
+            description="Retrieves current weather data for a given location",
+            tags=["weather", "location"],
+            input_schema={
                 "type": "object",
                 "properties": {
                     "location": {
@@ -24,7 +25,7 @@ class WeatherRetrieverTool(BaseTool):
                 },
                 "required": ["location"]
             },
-            "output_schema": {
+            output_schema={
                 "type": "object",
                 "properties": {
                     "location": {"type": "string"},
@@ -33,7 +34,7 @@ class WeatherRetrieverTool(BaseTool):
                     "precipitation_chance": {"type": "number"}
                 }
             }
-        }
+        )
 
     async def execute(self, location: str) -> Dict[str, Any]:
         """Get weather data for location"""
