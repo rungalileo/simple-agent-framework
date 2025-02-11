@@ -148,12 +148,20 @@ class EventFinderTool(BaseTool):
         }
 
         # Add location parameter
-        if "," in location and len(location.split(",")) == 2:
-            # Assume coordinates
-            lat, lon = map(float, location.split(","))
-            params["latlong"] = f"{lat},{lon}"
+        if "," in location:
+            parts = [p.strip() for p in location.split(",")]
+            # Try to parse as coordinates only if we have exactly 2 numeric parts
+            if len(parts) == 2 and all(p.replace(".", "").replace("-", "").isdigit() for p in parts):
+                try:
+                    lat, lon = map(float, parts)
+                    params["latlong"] = f"{lat},{lon}"
+                except ValueError:
+                    params["city"] = location
+            else:
+                # If parts don't look like coordinates, treat as city name
+                params["city"] = location
         else:
-            # Assume city name
+            # No comma, treat as city name
             params["city"] = location
 
         # Add category if specified

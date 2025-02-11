@@ -183,13 +183,21 @@ class RestaurantRecommenderTool(BaseTool):
         }
 
         # Add location parameter
-        if "," in location and len(location.split(",")) == 2:
-            # Assume coordinates
-            lat, lon = map(float, location.split(","))
-            params["latitude"] = lat
-            params["longitude"] = lon
+        if "," in location:
+            parts = [p.strip() for p in location.split(",")]
+            # Try to parse as coordinates only if we have exactly 2 numeric parts
+            if len(parts) == 2 and all(p.replace(".", "").replace("-", "").isdigit() for p in parts):
+                try:
+                    lat, lon = map(float, parts)
+                    params["latitude"] = lat
+                    params["longitude"] = lon
+                except ValueError:
+                    params["location"] = location
+            else:
+                # If parts don't look like coordinates, treat as city name
+                params["location"] = location
         else:
-            # Assume city name
+            # No comma, treat as city name
             params["location"] = location
 
         # Add cuisine type if specified
