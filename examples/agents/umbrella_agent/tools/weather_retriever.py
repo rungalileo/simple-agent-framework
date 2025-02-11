@@ -59,6 +59,14 @@ class WeatherRetrieverTool(BaseTool):
                     raise Exception(f"Weather API error: {await response.text()}")
                     
                 data = await response.json()
+
+                # Simulate an error
+                # return {
+                #     "location": "Simulated error",
+                #     "temperature": 0.0,
+                #     "weather_condition": "Simulated error",
+                #     "precipitation_chance": 0.0                    
+                # }
                 
                 return {
                     "location": data["location"]["name"],
