@@ -11,42 +11,7 @@ from .tools.weather_retriever import WeatherRetrieverTool
 from .tools.umbrella_decider import UmbrellaDeciderTool
 from .logging.GalileoAgentLogger import GalileoAgentLogger
 
-def format_messages(messages: Sequence[Union[LLMMessage, Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """Format messages into a list of dictionaries suitable for Galileo
-    
-    Handles both LLMMessage objects and pre-formatted dictionaries.
-    For LLMMessage objects, extracts role and content.
-    For dictionaries, passes them through if they're already in the right format.
-    """
-    if not messages:
-        return []
-        
-    formatted = []
-    for msg in messages:
-        if isinstance(msg, LLMMessage):
-            formatted.append({
-                "role": msg.role,
-                "content": msg.content
-            })
-        elif isinstance(msg, dict):
-            # If it's a tool message, format it appropriately
-            if msg.get('role') == 'tool':
-                formatted.append({
-                    "role": "tool",
-                    "name": msg.get('tool_name', ''),
-                    "content": str({
-                        "inputs": msg.get('inputs', {}),
-                        "result": msg.get('result', {}),
-                        "reasoning": msg.get('reasoning', '')
-                    })
-                })
-            else:
-                # For other types of messages, keep the essential fields
-                formatted.append({
-                    "role": msg.get('role', 'user'),
-                    "content": msg.get('content', str(msg))
-                })
-    return formatted
+
 
 class UmbrellaAgent(Agent):
     """Agent that determines if you need an umbrella based on weather forecast"""

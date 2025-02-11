@@ -1,14 +1,13 @@
-from typing import Optional, List, Dict, Any, Tuple
-from datetime import datetime, timedelta
+from typing import List, Dict, Any, Tuple
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from agent_framework.agent import Agent
-from agent_framework.models import AgentMetadata, TaskAnalysis
 from agent_framework.state import AgentState
 from agent_framework.llm.models import LLMMessage
 from .tools.event_finder import EventFinderTool
 from .tools.weather_retriever import WeatherRetrieverTool
 from .tools.restaurant_recommender import RestaurantRecommenderTool
+from .logging.GalileoAgentLogger import GalileoAgentLogger
 
 class TravelAgent(Agent):
     """Agent that helps users find weather-appropriate events and matching restaurants"""
@@ -24,6 +23,7 @@ class TravelAgent(Agent):
             lstrip_blocks=True
         )
         
+        self.logger = GalileoAgentLogger(agent_id=self.agent_id)
         self._register_tools()
 
     def _create_planning_prompt(self, task: str) -> List[LLMMessage]:
@@ -74,6 +74,8 @@ class TravelAgent(Agent):
             metadata=RestaurantRecommenderTool.get_metadata(),
             implementation=RestaurantRecommenderTool
         )
+
+        self._setup_logger(logger=self.logger)
 
     async def _format_result(self, task: str, results: List[Tuple[str, Dict[str, Any]]]) -> str:
         """Format the final result showing the connection between events, weather, and dining"""
