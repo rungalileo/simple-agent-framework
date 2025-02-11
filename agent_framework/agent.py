@@ -332,8 +332,24 @@ class Agent(ABC):
         
         # If there's an explicit mapping from the LLM, use it
         if input_mapping:
-            return {k: self.state.get_variable(v, v) for k, v in input_mapping.items()}
-        
+            mapped_inputs = {}
+            for input_name, value_ref in input_mapping.items():
+                # Handle dot notation references (e.g., "event_finder.events")
+                if "." in value_ref:
+                    tool_name, field = value_ref.split(".")
+                    tool_result = self.state.get_tool_result(tool_name)
+                    if tool_result and isinstance(tool_result, dict):
+                        mapped_inputs[input_name] = tool_result.get(field)
+                else:
+                    # Try to get the entire tool result
+                    tool_result = self.state.get_tool_result(value_ref)
+                    if tool_result is not None:
+                        mapped_inputs[input_name] = tool_result
+                    else:
+                        # Fall back to using the value as is
+                        mapped_inputs[input_name] = value_ref
+            return mapped_inputs
+
         # Try to map inputs based on schema and state
         mapped_inputs = {}
         for input_name, input_schema in required_inputs.items():

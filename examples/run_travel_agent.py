@@ -14,7 +14,7 @@ async def main():
     config = config.with_overrides(
         verbosity=VerbosityLevel.HIGH,
         enable_logging=False,
-        metadata={"location": "Houston, TX"}
+        metadata={"location": "Seattle, WA"}
     )
     
     # Create factory and agent
@@ -24,7 +24,7 @@ async def main():
         agent_id="travel_agent"
     )
     
-    await agent.run("Houston, TX")
+    await agent.run("Seattle, WA")
 
 if __name__ == "__main__":
     asyncio.run(main())

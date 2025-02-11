@@ -7,6 +7,7 @@ from agent_framework.llm.models import LLMMessage
 from .tools.event_finder import EventFinderTool
 from .tools.weather_retriever import WeatherRetrieverTool
 from .tools.restaurant_recommender import RestaurantRecommenderTool
+from .tools.itinerary_builder import ItineraryBuilderTool
 from .logging.GalileoAgentLogger import GalileoAgentLogger
 
 class TravelAgent(Agent):
@@ -74,44 +75,57 @@ class TravelAgent(Agent):
             metadata=RestaurantRecommenderTool.get_metadata(),
             implementation=RestaurantRecommenderTool
         )
+        # Itinerary builder
+        self.tool_registry.register(
+            metadata=ItineraryBuilderTool.get_metadata(),
+            implementation=ItineraryBuilderTool
+        )
 
         self._setup_logger(logger=self.logger)
 
     async def _format_result(self, task: str, results: List[Tuple[str, Dict[str, Any]]]) -> str:
         """Format the final result showing the connection between events, weather, and dining"""
-        output = []
-        events_data = None
-        weather_data = None
-        restaurant_data = None
-
-        # Collect data from each tool
+        # Since itinerary_builder is the last tool executed and contains the complete narrative,
+        # we should use its output as the final result
         for tool_name, result in results:
-            if tool_name == "event_finder":
-                events_data = result
-            elif tool_name == "weather_retriever":
-                weather_data = result
-            elif tool_name == "restaurant_recommender":
-                restaurant_data = result
-
-        if not all([events_data, weather_data, restaurant_data]):
-            return "Incomplete data to provide recommendations"
-
-        # Format selected events with weather context
-        output.append("🎯 Selected Events (Weather-Appropriate):")
-        for event in events_data.get("events", []):
-            output.append(f"\n• {event.get('name')}")
-            output.append(f"  📅 {event.get('date')} at {event.get('time')}")
-            output.append(f"  📍 {event.get('venue', {}).get('name')}")
-            output.append(f"  🌤 Weather: {weather_data.get('weather_condition')}, {weather_data.get('temperature')}°C")
-            output.append(f"  🌧 Precipitation Chance: {weather_data.get('precipitation_chance')}%")
-
-        # Format restaurant recommendations
-        output.append("\n\n🍽 Recommended Restaurants (Matching Your Activities):")
-        for restaurant in restaurant_data.get("restaurants", [])[:3]:  # Top 3 recommendations
-            output.append(f"\n• {restaurant.get('name')}")
-            output.append(f"  ⭐ {restaurant.get('rating')} stars ({restaurant.get('review_count')} reviews)")
-            output.append(f"  💰 {restaurant.get('price_level', 'Price N/A')}")
-            output.append(f"  🍳 {', '.join(restaurant.get('cuisine_types', []))}")
-            output.append(f"  📍 {restaurant.get('location', {}).get('address')}")
-
-        return "\n".join(output)
+            if tool_name == "itinerary_builder":
+                output = []
+                
+                # Add weather considerations if available
+                weather_considerations = result.get("weather_considerations", {})
+                if weather_considerations:
+                    output.append("🌤 Weather Considerations:")
+                    output.append(f"• Overall: {weather_considerations.get('overall_assessment', 'Not available')}")
+                    if adaptations := weather_considerations.get("adaptations", []):
+                        output.append("• Adaptations:")
+                        for adaptation in adaptations:
+                            output.append(f"  - {adaptation}")
+                    output.append("")  # Add spacing
+                
+                # Add the main itinerary narrative
+                output.append("📋 Detailed Itinerary:")
+                output.append(result.get("itinerary", "Error: No itinerary was generated"))
+                output.append("")  # Add spacing
+                
+                # Add events section with weather justifications
+                events = result.get("events", [])
+                if events:
+                    output.append("🎯 Selected Events and Weather Considerations:")
+                    for event in events:
+                        output.append(f"\n• {event.get('name', 'Unnamed Event')}")
+                        if justification := event.get('weather_justification'):
+                            output.append(f"  ↳ {justification}")
+                
+                # Add restaurants section with pairing reasons
+                restaurants = result.get("restaurants", [])
+                if restaurants:
+                    output.append("\n🍽 Restaurant Pairings and Reasoning:")
+                    for restaurant in restaurants:
+                        output.append(f"\n• {restaurant.get('name', 'Unnamed Restaurant')}")
+                        if reason := restaurant.get('pairing_reason'):
+                            output.append(f"  ↳ {reason}")
+                
+                return "\n".join(output)
+        
+        # If we didn't find the itinerary builder result, return an error
+        return "Error: No itinerary was generated. Please try again."
