@@ -13,21 +13,19 @@ if TYPE_CHECKING:
 
 dotenv.load_dotenv()
 
-observe_logger = ObserveWorkflows(project_name="observe-umbrella-agent")
-
 class GalileoAgentLogger(AgentLogger):
     """Main logger interface for the agent"""
     def __init__(self, agent_id: str):
         super().__init__(agent_id)
         self.logger = GalileoLogger(agent_id)
-        self.observe_logger = ObserveWorkflows(project_name="observe-umbrella-agent")
+        self.observe_logger = ObserveWorkflows(project_name=f"observe-{agent_id}")
 
     async def on_agent_planning(self, planning_prompt: str) -> None:
         # Initialize workflow
         workflow = AsyncWorkflowWrapper(
             self.observe_logger.add_agent_workflow(
                 input=planning_prompt,
-                name="umbrella_agent",
+                name=f"{self.agent_id}_planning",
                 metadata={"agent_id": self.agent_id}
             )
         )

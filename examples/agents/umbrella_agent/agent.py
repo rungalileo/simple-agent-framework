@@ -27,6 +27,8 @@ class UmbrellaAgent(Agent):
             trim_blocks=True,
             lstrip_blocks=True
         )
+
+        print(f"Agent ID: {self.agent_id}")
         
         # Initialize logger and register tools
         self.logger = GalileoAgentLogger(agent_id=self.agent_id)

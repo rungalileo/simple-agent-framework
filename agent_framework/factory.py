@@ -43,6 +43,7 @@ class AgentFactory:
         
         # Create agent with injected dependencies
         agent = agent_class(
+            agent_id=agent_id,
             llm_provider=llm_provider,
             logger=logger,
             verbosity=self.config.verbosity,

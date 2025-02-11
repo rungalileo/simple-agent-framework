@@ -25,6 +25,7 @@ class Agent(ABC):
     def __init__(
         self,
         *args,
+        agent_id: Optional[str] = None,
         verbosity: VerbosityLevel = VerbosityLevel.LOW,
         logger: Optional[AgentLogger] = None,
         tool_selection_hooks: Optional[ToolSelectionHooks] = None,
@@ -32,7 +33,7 @@ class Agent(ABC):
         llm_provider: Optional[LLMProvider] = None,
         **kwargs
     ):
-        self.agent_id = str(uuid4())
+        self.agent_id = agent_id or str(uuid4())
         self.config = AgentConfig(
             verbosity=verbosity,
             tool_selection_hooks=tool_selection_hooks,
