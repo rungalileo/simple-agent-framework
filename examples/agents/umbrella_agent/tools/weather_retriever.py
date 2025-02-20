@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 from dotenv import load_dotenv
 from agent_framework.tools.base import BaseTool
 from agent_framework.models import ToolMetadata
-
+from .schemas import WeatherRetrieverInput, WeatherRetrieverOutput, WeatherRetrieverMetadata
 class WeatherRetrieverTool(BaseTool):
     """Tool for retrieving weather data"""
 
@@ -15,25 +15,8 @@ class WeatherRetrieverTool(BaseTool):
             name="weather_retriever",
             description="Retrieves current weather data for a given location",
             tags=["weather", "location"],
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "Location to get weather for (e.g. 'London, UK')"
-                    }
-                },
-                "required": ["location"]
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"},
-                    "temperature": {"type": "number"},
-                    "weather_condition": {"type": "string"},
-                    "precipitation_chance": {"type": "number"}
-                }
-            }
+            input_schema=WeatherRetrieverInput.model_json_schema(),
+            output_schema=WeatherRetrieverOutput.model_json_schema(),
         )
 
     async def execute(self, location: str) -> Dict[str, Any]:

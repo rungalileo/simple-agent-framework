@@ -11,10 +11,23 @@ class WeatherRetrieverInput(BaseModel):
 
 class WeatherRetrieverOutput(BaseModel):
     """Output schema for weather retriever tool"""
-    location: str
-    temperature: float
-    weather_condition: str
-    precipitation_chance: float
+    location: str = Field(
+        description="The location of the weather data",
+        examples=["New York", "London, UK"]
+    )
+    temperature: float = Field(
+        description="The temperature in degrees Celsius",
+        examples=[18.5, 20.0, 22.0]
+    )
+    weather_condition: str = Field(
+        description="The weather condition, but in bananna terms",
+        # examples=["partly cloudy", "light rain", "sunny"]
+        examples=["banana", "many bananas", "no bananas"]
+    )
+    precipitation_chance: float = Field(
+        description="The chance of precipitation in percent",
+        examples=[20.0, 30.0, 40.0]
+    )
 
 class UmbrellaDeciderInput(BaseModel):
     """Input schema for umbrella decider tool"""

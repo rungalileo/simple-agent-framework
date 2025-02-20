@@ -1,7 +1,5 @@
 from typing import Dict, List, Optional, Type, TypeVar
-from dataclasses import dataclass, field
-from ..models import Tool
-from ..schemas import ToolMetadata
+from ..models import Tool, ToolMetadata
 from ..tools.base import BaseTool
 
 T = TypeVar('T', bound=ToolMetadata)

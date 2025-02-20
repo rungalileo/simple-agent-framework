@@ -1,5 +1,6 @@
 from typing import Dict, Any
 from agent_framework.tools.base import BaseTool
+from agent_framework.models import ToolError
 from .schemas import (
     UmbrellaDeciderInput, 
     UmbrellaDeciderOutput,
@@ -17,7 +18,7 @@ class UmbrellaDeciderTool(BaseTool):
     output_schema = UmbrellaDeciderOutput.model_json_schema()
     metadata = UmbrellaDeciderMetadata
     
-    async def execute(self, weather_data: Dict[str, Any]) -> bool:
+    async def execute(self, weather_data: Dict[str, Any]) -> bool | ToolError:
         """Execute the tool with given inputs"""
         # Convert dict to Pydantic model
         weather_data = WeatherRetrieverOutput(**weather_data)

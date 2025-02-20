@@ -18,6 +18,10 @@ class ToolMetadata(BaseModel):
         description="Example uses of the tool"
     )
 
+class ToolError(BaseModel):
+    """Schema for tool errors"""
+    error: str = Field(description="Error message from the tool")    
+
 class AgentMetadata(BaseModel):
     """Base schema for agent metadata"""
     name: str = Field(description="Name of the agent")

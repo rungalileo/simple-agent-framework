@@ -19,6 +19,7 @@ class GalileoAgentLogger(AgentLogger):
         super().__init__(agent_id)
         self.logger = GalileoLogger(agent_id)
         self.observe_logger = ObserveWorkflows(project_name=f"observe-{agent_id}")
+        print(f"GalileoAgentLogger initialized for agent {agent_id}")
 
     async def on_agent_planning(self, planning_prompt: str) -> None:
         # Initialize workflow
