@@ -24,7 +24,7 @@ async def main():
         agent_id="travel_agent"
     )
     
-    await agent.run("Seattle, WA")
+    await agent.run("I want to tour in New York, New York")
 
 if __name__ == "__main__":
     asyncio.run(main())

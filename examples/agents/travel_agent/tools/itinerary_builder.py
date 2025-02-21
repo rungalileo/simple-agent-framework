@@ -45,7 +45,7 @@ class ItineraryBuilderTool(BaseTool):
         """Get tool metadata"""
         return ToolMetadata(
             name="itinerary_builder",
-            description="Builds a weather-aware, thematically cohesive itinerary based on events and restaurants",
+            description="Builds a weather-aware, thematically cohesive itinerary based on events and/or restaurants",
             tags=["itinerary", "planning", "organization", "travel", "weather"],
             input_schema={
                 "type": "object",
@@ -54,7 +54,7 @@ class ItineraryBuilderTool(BaseTool):
                     "restaurants": {"type": "array", "items": {"type": "object"}},
                     "weather_data": {"type": "object"}
                 },
-                "required": ["events", "restaurants"]
+                "required": []  # Neither events nor restaurants are required
             },
             output_schema={
                 "type": "object",
@@ -68,25 +68,30 @@ class ItineraryBuilderTool(BaseTool):
             }
         )
 
-    async def execute(self, events: List[Dict[str, Any]], restaurants: List[Dict[str, Any]], weather_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Build an itinerary based on events, restaurants, and weather conditions"""
+    async def execute(self, events: Optional[List[Dict[str, Any]]] = None, restaurants: Optional[List[Dict[str, Any]]] = None, weather_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Build an itinerary based on events and/or restaurants"""
         # Create a prompt for the LLM
+        events = events or []  # Use empty list if events is None
+        restaurants = restaurants or []  # Use empty list if restaurants is None
+        
         prompt = [
             LLMMessage(
                 role="system",
                 content="""You are an expert travel planner creating engaging and weather-aware itineraries.
                 Your task is to create a detailed itinerary that:
-                1. Organizes events chronologically and considers weather conditions
-                2. Pairs events with thematically appropriate restaurants
-                3. Provides weather-based recommendations and alternatives
-                4. Makes meaningful cultural and thematic connections
-                5. Explains the reasoning behind each pairing
-                6. For every event mentioned, mention the excat time and date of the event. 
+                1. Organizes activities chronologically and considers weather conditions
+                2. Includes events if provided
+                3. Includes restaurants if provided
+                4. Pairs events with restaurants when both are available
+                5. Provides weather-based recommendations and alternatives
+                6. Makes meaningful cultural and thematic connections
+                7. Explains the reasoning behind each pairing or selection
+                8. For every event mentioned, mention the exact time and date of the event
                 
                 For example:
-                - "Given the sunny weather, the outdoor jazz festival pairs perfectly with the rooftop soul food restaurant"
-                - "With light rain expected, we've chosen the indoor Latin music venue and matched it with the cozy Mexican restaurant"
-                - "The modern art gallery opening is climate-controlled, making it ideal for the hot afternoon, and pairs naturally with the contemporary fusion restaurant"
+                - Event-only: "The outdoor jazz festival is perfect for the sunny afternoon"
+                - Restaurant-only: "Given the pleasant evening weather, start at the rooftop soul food restaurant"
+                - Combined: "After the indoor art gallery opening, head to the nearby fusion restaurant"
                 
                 Use an engaging, conversational tone and make all connections clear to the reader.
                 Include practical weather-based tips and suggestions throughout the itinerary.
@@ -95,7 +100,7 @@ class ItineraryBuilderTool(BaseTool):
                 {
                     "itinerary": "The complete narrative...",
                     "events": [{"name": "event name", "weather_justification": "why this works with the weather"}],
-                    "restaurants": [{"name": "restaurant name", "pairing_reason": "why this pairs well"}],
+                    "restaurants": [{"name": "restaurant name", "pairing_reason": "why this was selected"}],
                     "weather_considerations": {"overall_assessment": "weather impact", "adaptations": ["specific adjustments"]}
                 }"""
             ),
@@ -103,17 +108,14 @@ class ItineraryBuilderTool(BaseTool):
                 role="user",
                 content=f"""Create a weather-aware, thematically cohesive itinerary using:
 
-                Events:
-                {json.dumps(events, indent=2)}
+                {f'Events:\n{json.dumps(events, indent=2)}' if events else 'No events provided'}
 
-                Restaurants:
-                {json.dumps(restaurants, indent=2)}
+                {f'Restaurants:\n{json.dumps(restaurants, indent=2)}' if restaurants else 'No restaurants provided'}
 
                 Weather Conditions:
                 {json.dumps(weather_data, indent=2) if weather_data else "Weather data not available"}
 
-                Create an itinerary that considers weather conditions, pairs events with thematically appropriate restaurants,
-                and explains the reasoning behind each choice."""
+                Create an itinerary that considers weather conditions and explains the reasoning behind each choice."""
             )
         ]
 
