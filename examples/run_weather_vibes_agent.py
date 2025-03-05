@@ -1,7 +1,7 @@
 import asyncio
 from agent_framework.config import AgentConfiguration
 from agent_framework.factory import AgentFactory
-from examples.agents.weather_vibes_agent.agent import WeatherVibesAgent
+from agents.weather_vibes_agent.agent import WeatherVibesAgent
 from agent_framework.models import VerbosityLevel
 
 async def main():

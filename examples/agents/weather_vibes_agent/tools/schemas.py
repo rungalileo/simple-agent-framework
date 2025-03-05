@@ -43,15 +43,40 @@ class UmbrellaDeciderOutput(BaseModel):
 
 # New schemas for YouTube Weather Vibes tool
 class YoutubeWeatherVibesInput(BaseModel):
-    """Input schema for YouTube weather vibes tool"""
+    """Input schema for YouTube weather vibes tool
+    
+    This schema accepts either:
+    1. Individual weather_condition and temperature parameters, or
+    2. A weather_data parameter containing the complete weather information
+    
+    At least one of these approaches must be used.
+    """
     weather_condition: str = Field(
         description="The current weather condition",
-        examples=["partly cloudy", "light rain", "sunny"]
+        examples=["partly cloudy", "light rain", "sunny"],
+        default=None
     )
     temperature: float = Field(
         description="The temperature in degrees Celsius",
-        examples=[18.5, 20.0, 22.0]
+        examples=[18.5, 20.0, 22.0],
+        default=None
     )
+    weather_data: WeatherRetrieverOutput = Field(
+        description="Weather data from the weather retriever tool",
+        default=None
+    )
+    
+    def model_post_init(self, _context):
+        """Validate that either weather_data or both individual parameters are provided."""
+        if self.weather_data is None and (self.weather_condition is None or self.temperature is None):
+            raise ValueError("Either weather_data or both weather_condition and temperature must be provided")
+            
+        # If weather_data is provided but individual parameters are not, populate them
+        if self.weather_data is not None:
+            if self.weather_condition is None:
+                self.weather_condition = self.weather_data.weather_condition
+            if self.temperature is None:
+                self.temperature = self.weather_data.temperature
 
 class VideoInfo(BaseModel):
     """Schema for video information"""
@@ -138,6 +163,16 @@ class YoutubeWeatherVibesMetadata(ToolMetadata):
             "input": {
                 "weather_condition": "light rain",
                 "temperature": 18.5
+            },
+        },
+        {
+            "input": {
+                "weather_data": {
+                    "location": "London, UK",
+                    "temperature": 18.5,
+                    "weather_condition": "light rain",
+                    "precipitation_chance": 60.0
+                }
             },
             "output": {
                 "weather_condition": "light rain",

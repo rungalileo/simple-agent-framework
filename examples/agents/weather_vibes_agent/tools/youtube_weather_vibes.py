@@ -1,10 +1,11 @@
 import aiohttp
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from agent_framework.tools.base import BaseTool
 from agent_framework.models import ToolMetadata
 from .schemas import YoutubeWeatherVibesInput, YoutubeWeatherVibesOutput
+from pydantic import BaseModel
 
 class YoutubeWeatherVibesTool(BaseTool):
     """Tool for finding YouTube videos that match weather vibes"""
@@ -20,12 +21,45 @@ class YoutubeWeatherVibesTool(BaseTool):
             output_schema=YoutubeWeatherVibesOutput.model_json_schema(),
         )
 
-    async def execute(self, weather_condition: str, temperature: float) -> Dict[str, Any]:
-        """Find YouTube videos that match the weather vibe"""
+    async def execute(self, weather_condition: str = None, temperature: float = None, weather_data: Optional[Dict[str, Any]] = None, input_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Find YouTube videos that match the weather vibe
+        
+        Args:
+            weather_condition: The current weather condition (e.g., "Cloudy", "Rainy")
+            temperature: The current temperature in degrees Celsius
+            weather_data: Output from the weather_retriever tool containing weather_condition and temperature
+            input_data: Optional dictionary containing weather_condition and temperature
+            
+        Returns:
+            Dictionary containing weather information and matching YouTube videos
+        """
         load_dotenv()
-        api_key = os.getenv("YOUTUBE_API_KEY")
+        
+        # First priority: check if individual parameters were provided
+        if weather_condition is None or temperature is None:
+            # Second priority: extract from weather_data parameter
+            if weather_data:
+                weather_condition = weather_data.get('weather_condition', weather_condition)
+                temperature = weather_data.get('temperature', temperature)
+            
+            # Third priority: check if input_data has the required fields
+            if input_data and (weather_condition is None or temperature is None):
+                weather_condition = input_data.get('weather_condition', weather_condition)
+                temperature = input_data.get('temperature', temperature)
+        
+        # Validate that we have the required data
+        if weather_condition is None or temperature is None:
+            missing = []
+            if weather_condition is None:
+                missing.append("weather_condition")
+            if temperature is None:
+                missing.append("temperature")
+            raise ValueError(f"Missing required weather data: {', '.join(missing)}")
+            
+        # Check API key
+        api_key = os.getenv('YOUTUBE_API_KEY')
         if not api_key:
-            raise ValueError("YOUTUBE_API_KEY environment variable is required")
+            raise ValueError("YOUTUBE_API_KEY environment variable is not set")
 
         # Determine search query based on weather condition and temperature
         search_query = self._generate_search_query(weather_condition, temperature)
@@ -55,11 +89,12 @@ class YoutubeWeatherVibesTool(BaseTool):
                     video_id = item.get("id", {}).get("videoId")
                     if video_id:
                         videos.append({
-                            "title": item.get("snippet", {}).get("title", "Unknown"),
+                            "title": item.get("snippet", {}).get("title", ""),
+                            "channel_title": item.get("snippet", {}).get("channelTitle", ""),
                             "description": item.get("snippet", {}).get("description", ""),
-                            "thumbnail_url": item.get("snippet", {}).get("thumbnails", {}).get("medium", {}).get("url", ""),
-                            "video_url": f"https://www.youtube.com/watch?v={video_id}",
-                            "video_id": video_id
+                            "thumbnail": item.get("snippet", {}).get("thumbnails", {}).get("high", {}).get("url", ""),
+                            "video_id": video_id,
+                            "url": f"https://www.youtube.com/watch?v={video_id}"
                         })
                 
                 return {
