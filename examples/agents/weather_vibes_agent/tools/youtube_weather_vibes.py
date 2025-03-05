@@ -92,9 +92,9 @@ class YoutubeWeatherVibesTool(BaseTool):
                             "title": item.get("snippet", {}).get("title", ""),
                             "channel_title": item.get("snippet", {}).get("channelTitle", ""),
                             "description": item.get("snippet", {}).get("description", ""),
-                            "thumbnail": item.get("snippet", {}).get("thumbnails", {}).get("high", {}).get("url", ""),
+                            "thumbnail_url": item.get("snippet", {}).get("thumbnails", {}).get("high", {}).get("url", ""),
                             "video_id": video_id,
-                            "url": f"https://www.youtube.com/watch?v={video_id}"
+                            "video_url": f"https://www.youtube.com/watch?v={video_id}"
                         })
                 
                 return {
